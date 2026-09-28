@@ -390,6 +390,32 @@ python3 train.py stream --steps 140000 --lr 2e-4   # the packed-corpus path
 python3 train.py ponder-probe --ckpt weights       # depth against difficulty
 ```
 
+### Installing agent skills safely (SkillSpector gate)
+
+Agent skills (SKILL.md packages that coding agents read and follow) execute
+with implicit trust, and NVIDIA's SkillSpector research found roughly a
+quarter of community skills carrying vulnerabilities. The rule in this
+repository: **scan first, install second**.
+
+```bash
+# one-time: install the scanner (Python 3.12+ via uv)
+uv python install 3.12
+uv tool install git+https://github.com/lautaeferdinandus831021-lgtm/SkillSpector.git
+
+# scan before install; the gate blocks anything with findings
+bash scripts/skills_gate.sh NVIDIA/skills
+npx skills add NVIDIA/skills          # only after the gate passes
+
+# report without blocking (record findings, decide by hand)
+SCAN_ONLY=1 bash scripts/skills_gate.sh <target>
+```
+
+Reports land in `.skillspector/`. The gate fails closed: no scanner on PATH
+means nothing gets installed. The same discipline applies to model output:
+`minagi/skills.py` scans what the model writes (security batteries, PII,
+secrets, prompt injection) both in the training log and in `serve.py`.
+```
+
 Every tool takes `--ckpt weights` - the directory is the model, and there are no `.pt` files to keep track of.
 
 ## Initialization
