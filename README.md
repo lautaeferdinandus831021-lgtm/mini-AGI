@@ -451,11 +451,15 @@ If a run diverges, it repairs itself: when held-out exceeds the best by more tha
 The system is three layers. **Entry points** are thin orchestration only:
 `train.py` (batch CLI: `read | stream | ponder-probe`), `serve.py` (Flask
 SSE chat UI), and two operational scripts — `scripts/skills_gate.sh`
-(supply-chain gate for agent skills) and `scripts/test_sandbox.sh
-(tests that can never dirty the working tree). Below them sits the
+(supply-chain gate for agent skills) and `scripts/test_sandbox.sh` (tests that can never dirty the working tree). Below them sits the
 **`minagi/` library**, where all mechanics live. **State** is flat files:
 `weights/` (one `.npz` per expert — the directory *is* the model) and
 `runs/samples.txt` (the sample log every graph is drawn from).
+
+> **Detailed workflows:** how the app actually runs — serving & chat,
+> training, live learning, the skill supply chain, output scanning, and
+> the test gate — is documented step by step in
+> [`docs/WORKFLOWS.md`](docs/WORKFLOWS.md).
 
 One design axiom shapes the whole flow: **reading and writing are the same
 code path.** `minagi/stream.py` is the single primitive — a `Reader` walks a
@@ -556,6 +560,7 @@ scripts/           skills_gate.sh   security gate for agent skills (scan
 artifacts/         FINDINGS_INDEX.md - titles, CWE mapping, uncensored
                    findings and timeline for every security artifact
 docs/              WORKFLOWS.md - every app workflow, detailed end to end
+                   → see [docs/WORKFLOWS.md](docs/WORKFLOWS.md)
 config.yaml      the settings worth changing
 corpora/         python3 -m corpora all - the whole corpus, downloaded and made
 weights/         one file per expert. this directory is the model.
