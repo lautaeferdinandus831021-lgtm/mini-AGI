@@ -38,6 +38,7 @@ from flask import Flask, Response, jsonify, request
 
 from minagi.recur import load_any
 from minagi.tokenizer import ByteTokenizer
+from minagi.identity import APP_NAME as _APP_NAME
 from minagi.skills import GROUPS as _SKILL_GROUPS
 from minagi.skills import run_skill as _skill_run
 from minagi.skills import scan as _skill_scan
@@ -492,7 +493,7 @@ PAGE = r'''<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>mini-AGI</title>
+<title>WhiteHat_mini-AGI</title>
 <style>
   :root{
     --bg:#ffffff; --fg:#1f2328; --dim:#6b7280; --line:#e5e7eb;
@@ -581,7 +582,7 @@ PAGE = r'''<!doctype html>
 </style></head>
 <body>
 <header>
-  <b>mini-AGI</b>
+  <b>WhiteHat_mini-AGI</b>
   <span class="sp"></span>
   <button id="reset">New chat</button>
 </header>
@@ -612,6 +613,7 @@ PAGE = r'''<!doctype html>
 </footer>
 
 <script>
+const APP_NAME = 'WhiteHat_mini-AGI';  // kept in sync with minagi/identity.py
 const thread = document.getElementById('thread');
 const log    = document.getElementById('log');
 const q      = document.getElementById('q');
@@ -720,7 +722,7 @@ function add(role, text){
   const d = document.createElement('div');
   d.className = 'msg ' + role;
   d.innerHTML = '<div class="who"></div><div class="body"></div>';
-  d.querySelector('.who').textContent = role === 'user' ? 'You' : 'mini-AGI';
+  d.querySelector('.who').textContent = role === 'user' ? 'You' : APP_NAME;
   d.querySelector('.body').textContent = text || '';
   thread.appendChild(d);
   return d.querySelector('.body');

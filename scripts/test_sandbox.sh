@@ -40,6 +40,9 @@ echo "[sandbox] $SB"
 # writes next to the code cannot touch the working tree
 git -C "$REPO" archive HEAD | tar -x -C "$SB"
 sha_ref="$(git -C "$REPO" status --porcelain | wc -l | tr -d ' ')"
+# snapshot the tree's diff fingerprint: the suite must not alter it, whether
+# the tree started clean or mid-feature
+diff_before="$(git -C "$REPO" diff | git hash-object --stdin)"
 
 #-----------------------------------------------------------------------------
 sect "1. python syntax (sandboxed checkout)"
@@ -196,10 +199,11 @@ if [ "$now" = "$sha_ref" ]; then
 else
     bad "working tree changed during tests ($sha_ref -> $now)"
 fi
-if [ "$(git -C "$REPO" diff | wc -l | tr -d ' ')" = "0" ]; then
-    ok "git diff empty"
+diff_after="$(git -C "$REPO" diff | git hash-object --stdin)"
+if [ "$diff_after" = "$diff_before" ]; then
+    ok "git diff fingerprint unchanged by the run"
 else
-    bad "git diff not empty"
+    bad "git diff changed during tests"
 fi
 
 #-----------------------------------------------------------------------------

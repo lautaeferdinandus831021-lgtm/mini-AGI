@@ -30,6 +30,7 @@ from dataclasses import asdict
 
 from minagi.skills import format_scans as _skills_block
 from minagi.skills import scan as _skills_scan
+from minagi.identity import banner as _app_banner
 
 # BEFORE torch, because the allocator reads this once at CUDA init and ignores
 # it afterwards. Without it PyTorch's caching allocator keeps its free blocks in
@@ -1964,6 +1965,7 @@ def cmd_ponder_probe(args):
 
 
 def main():
+    print(_app_banner())
     ap = argparse.ArgumentParser(
         description="train mini-AGI: read files continually, or stream a "
                     "packed corpus. Batch 1, cached, chunked, either way")
