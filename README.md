@@ -414,6 +414,20 @@ Reports land in `.skillspector/`. The gate fails closed: no scanner on PATH
 means nothing gets installed. The same discipline applies to model output:
 `minagi/skills.py` scans what the model writes (security batteries, PII,
 secrets, prompt injection) both in the training log and in `serve.py`.
+
+### Running the tests (sandboxed)
+
+```bash
+bash scripts/test_sandbox.sh            # full suite, no GPU needed
+KEEP=1 bash scripts/test_sandbox.sh     # keep the sandbox for inspection
+```
+
+Everything runs in a throwaway checkout under `/tmp`: py_compile over the
+whole tree, the full `minagi.skills` regression, every `skills_gate.sh`
+exit path (clean / HIGH findings / SCAN_ONLY / fail-closed / corrupt
+report, against a stub scanner and a synthetic skill built in the sandbox),
+and a final check that `git status` and `git diff` are exactly as they were
+before the run - the working tree comes out as clean as it went in.
 ```
 
 Every tool takes `--ckpt weights` - the directory is the model, and there are no `.pt` files to keep track of.
