@@ -345,7 +345,7 @@ The right panel shows which subjects are still moving. code, chat, reasoning, st
 2. Clone the repository:
     ```bash
     git clone <repository-url>
-    cd mini-AGI
+    cd WhiteHat_mini-AGI
     ```
 3. Install the dependencies:
     ```bash
@@ -428,7 +428,6 @@ exit path (clean / HIGH findings / SCAN_ONLY / fail-closed / corrupt
 report, against a stub scanner and a synthetic skill built in the sandbox),
 and a final check that `git status` and `git diff` are exactly as they were
 before the run - the working tree comes out as clean as it went in.
-```
 
 Every tool takes `--ckpt weights` - the directory is the model, and there are no `.pt` files to keep track of.
 
@@ -439,6 +438,77 @@ A fresh model starts small and grows into its shape. The context window begins a
 This means the first hours of a run look nothing like the rest of it. Loss falls fast, the pool churns, the window is short, and the learning-rate controller has not gathered enough evaluations to act. None of that is a problem to fix.
 
 If a run diverges, it repairs itself: when held-out exceeds the best by more than `--revert-factor` (default 1.5x) the run reloads `weights/`, halves the learning rate, pulls the context back and continues. After `--max-reverts` it stops rather than thrash.
+
+## Architecture at a glance
+
+The system is three layers. **Entry points** are thin orchestration only:
+`train.py` (batch CLI: `read | stream | ponder-probe`), `serve.py` (Flask
+SSE chat UI), and two operational scripts — `scripts/skills_gate.sh`
+(supply-chain gate for agent skills) and `scripts/test_sandbox.sh
+(tests that can never dirty the working tree). Below them sits the
+**`minagi/` library**, where all mechanics live. **State** is flat files:
+`weights/` (one `.npz` per expert — the directory *is* the model) and
+`runs/samples.txt` (the sample log every graph is drawn from).
+
+One design axiom shapes the whole flow: **reading and writing are the same
+code path.** `minagi/stream.py` is the single primitive — a `Reader` walks a
+character stream behind a KV cache; `chunk` bounds the autograd graph (peak
+VRAM), `context` bounds attention (cheap). With a gradient step it is
+training; without one it is inference. Same code, same cost.
+
+Two security rails were added on top of that core, one per direction:
+
+- **Inbound (supply chain):** agent skills entering the repo pass
+  `scripts/skills_gate.sh` — a SkillSpector scan (static pass) that blocks
+  HIGH/CRITICAL findings and fails closed. Verdicts and the CWE mapping are
+  indexed in [`artifacts/FINDINGS_INDEX.md`](artifacts/FINDINGS_INDEX.md).
+- **Outbound (model output):** `minagi/skills.py` — 33 evals (Future AGI's
+  taxonomy, re-implemented natively, zero new dependencies) scan what the
+  model writes: 20 deterministic code evals plus an 8-battery security scan
+  (PII, secrets, prompt injection, unsafe code, SQLi, XSS, traversal,
+  phishing). Wired into the training sample log (`--skills`), the chat done
+  event, and `GET/POST /api/skills`.
+
+## Request flow: training (`train.py read`)
+
+```
+files / corpus (byte-level: the alphabet IS the 256 bytes)
+   │  ingest.py — walk, chunk, no tokenizer to fit
+   ▼
+cmd_read() loop ─────────────────────────────────────────────┐
+  stream.py Reader: chunk → KV cache → gradient step         │
+  paged.py: demand-scored expert paging disk ↔ RAM ↔ VRAM    │
+  pool.py: grow (recombination) / prune (unaddressed time)   │
+  plasticity.py: LR governed by held-out loss                │
+        │  every --sample-every minutes                      │
+        ▼                                                    │
+  sample_now() → 9 prompt lanes, each generated twice        │
+  (raw = unguarded, adapted = decode-rule steered)           │
+        ▼                                                    │
+  write_samples() → runs/samples.txt                         │
+    header + per-lane text, repeat-rate, chess legality      │
+    + [skills] raw lane → minagi/skills.py scan → <skills>   │
+      block: deterministic, so the log stays diffable        │
+```
+
+## Request flow: serving (`serve.py`)
+
+```
+GET /            → the page (title/brand from minagi/identity.py)
+POST /api/chat   → SSE stream: one character per event, greedily,
+                   adaptation trace suppressing loops (decode.py);
+                   every 64 chars the working set is re-checked
+                   (choose_for, hysteresis-gated swaps)
+   └─ done event → {skills: scan(reply)} — same battery as training
+remember()       → the finished exchange joins the stream via
+   ▲               minagi/live.py LiveLearner: one optimiser step per
+   │               `chunk` chars, trunk at reduced LR, atomic saves
+GET /api/skills  → run one eval or the security battery over arbitrary text
+GET /api/state   → resident experts, learning counters
+```
+
+Serving and training share `stream.py`, `pool.py` and `skills.py` — there is
+no second mechanism to reason about.
 
 ## Layout
 
@@ -454,6 +524,7 @@ minagi/          the model. no command lines here.
   paged.py         the same pool spread over disk, RAM and VRAM
   recur.py         latent recurrence with adaptive depth
   stream.py        reading a corpus behind a KV cache, one chunk at a time
+  corpus.py        the batch-shaped corpus view, for the batch trainer and benchmarks
   store.py         the weights directory, which IS the model
   optim.py         how much of a gradient is signal
   plasticity.py    the learning rate, governed by held-out loss
@@ -470,9 +541,17 @@ minagi/          the model. no command lines here.
 
 train.py         read | stream | ponder-probe
 serve.py         local web UI
+scripts/           skills_gate.sh   security gate for agent skills (scan
+                                    before install; HIGH/CRITICAL block)
+                   test_sandbox.sh  the whole test suite in a throwaway
+                                    /tmp checkout - the working tree
+                                    comes out exactly as it went in
+artifacts/         FINDINGS_INDEX.md - titles, CWE mapping, uncensored
+                   findings and timeline for every security artifact
 config.yaml      the settings worth changing
 corpora/         python3 -m corpora all - the whole corpus, downloaded and made
 weights/         one file per expert. this directory is the model.
+.agents/skills/  SkillSpector-gated agent skills installed via `npx skills add`
 ```
 
 `weights/` is written on the first run and `data/` by `corpora`; neither is in
