@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "skills": {
+    "nemo-automodel-distributed-training": {
+      "source": "NVIDIA/skills",
+      "sourceType": "github",
+      "skillPath": "skills/nemo-automodel-distributed-training/SKILL.md",
+      "computedHash": "f0d6a9b236793a5e4f1f713fcc238bc4a8a171e718035ef66e92d981137718e8"
+    },
+    "nemo-automodel-recipe-development": {
+      "source": "NVIDIA/skills",
+      "sourceType": "github",
+      "skillPath": "skills/nemo-automodel-recipe-development/SKILL.md",
+      "computedHash": "641f21d199b97ba37ec9d938e67911b24e339f24be3bb2ca57c5f293c4c59aad"
+    }
+  }
+}
