@@ -383,6 +383,9 @@ python3 -m corpora all --only wikipedia stories    # rebuild particular lanes
 python3 -m corpora expand                          # .bin -> the text files read
 
 python3 train.py read --help                       # every knob the reader has
+python3 train.py read --skills ...                 # add a security scan of every sample to the log
+python3 -m minagi.skills list                      # every skill, by group
+python3 -m minagi.skills scan --input out.txt      # security battery over any text
 python3 train.py stream --steps 140000 --lr 2e-4   # the packed-corpus path
 python3 train.py ponder-probe --ckpt weights       # depth against difficulty
 ```
@@ -416,6 +419,12 @@ minagi/          the model. no command lines here.
   plasticity.py    the learning rate, governed by held-out loss
   live.py          serving a model that is being trained underneath
   report.py        the model reading statistics off its own weights
+  skills.py        output evals - Future AGI's skill taxonomy re-implemented
+                   natively: 20 deterministic code evals (string checks,
+                   BLEU/ROUGE/recall/ranking, similarity) plus an 8-battery
+                   security scan (PII, secrets, prompt injection, unsafe
+                   code, SQLi, XSS, traversal, phishing). CLI:
+                   `python3 -m minagi.skills list|run|scan`
   create.py        writing a fresh weights directory from config.yaml
 
 train.py         read | stream | ponder-probe

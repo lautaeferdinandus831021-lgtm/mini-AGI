@@ -38,6 +38,9 @@ from flask import Flask, Response, jsonify, request
 
 from minagi.recur import load_any
 from minagi.tokenizer import ByteTokenizer
+from minagi.skills import GROUPS as _SKILL_GROUPS
+from minagi.skills import run_skill as _skill_run
+from minagi.skills import scan as _skill_scan
 
 app = Flask(__name__)
 
@@ -421,11 +424,33 @@ def api_chat():
                 "learn": learn_state(), "pool": resident_experts()}
         if learned:
             done["learned"] = learned
+        rep = "".join(reply)
+        if rep.strip():
+            # skill battery over what the model just wrote - same evals the
+            # training log carries, so serving and reading report alike
+            done["skills"] = _skill_scan(rep[:4000])
         yield "data: " + json.dumps(done) + "\n\n"
 
     return Response(events(), mimetype="text/event-stream",
                     headers={"Cache-Control": "no-cache",
                              "X-Accel-Buffering": "no"})
+
+
+@app.route("/api/skills", methods=["GET", "POST"])
+def api_skills():
+    """Skill evals (Future AGI taxonomy, native). GET ?name=X&text=Y runs
+    one skill; POST {"text": ...} runs the security battery; bare GET lists
+    what exists."""
+    if request.method == "POST":
+        body = request.get_json(force=True)
+        text = str(body.get("text", ""))[:8000]
+        return jsonify({"scan": _skill_scan(text)})
+    name = request.args.get("name")
+    if name:
+        return jsonify(_skill_run(name, request.args.get("text", "")))
+    return jsonify({"groups": _SKILL_GROUPS,
+                    "source": "minagi/skills.py - Future AGI taxonomy, "
+                              "native dependency-free implementation"})
 
 
 @app.route("/api/state")

@@ -28,6 +28,9 @@ import time
 import argparse
 from dataclasses import asdict
 
+from minagi.skills import format_scans as _skills_block
+from minagi.skills import scan as _skills_scan
+
 # BEFORE torch, because the allocator reads this once at CUDA init and ignores
 # it afterwards. Without it PyTorch's caching allocator keeps its free blocks in
 # fixed segments, and a run that alternates between a few large short-lived
@@ -1149,7 +1152,8 @@ def cmd_read(args):
                                   info["characters"], ctx_now, ctx_max,
                                   context_gain(), rate,
                                   float(np.mean(grads)) if grads else None,
-                                  args.clip, plast.state())
+                                  args.clip, plast.state(),
+                                  skills=args.skills)
                     rp = pool.report()
                     print(f"    samples -> {args.sample_log}"
                           + (f"  train {float(np.mean(recent)):.4f}"
@@ -1313,7 +1317,8 @@ def cmd_read(args):
                       opt.param_groups[-1]["lr"], info["characters"],
                       ctx_now, ctx_max, context_gain(),
                       seen / max(time.time() - t0, 1e-6),
-                      float(np.mean(grads)) if grads else None, args.clip)
+                      float(np.mean(grads)) if grads else None, args.clip,
+                      skills=args.skills)
         print(f"  final samples in {args.sample_log}")
 
     if args.save:
@@ -1652,7 +1657,7 @@ def refresh_plots():
 def write_samples(path, step, chars, minutes, samples, val=None, se=None,
                   per_domain=None, experts=None, train=None, lr=None,
                   corpus=None, context=None, ceiling=None, gain=None,
-                  rate=None, gnorm=None, clip=None, plast=None):
+                  rate=None, gnorm=None, clip=None, plast=None, skills=False):
     with open(path, "a") as f:
         f.write(f"\n{'=' * 78}\n")
         # How much has been read, against how much there is. A bare count of
@@ -1764,6 +1769,21 @@ def write_samples(path, step, chars, minutes, samples, val=None, se=None,
                                    ", none illegal"))
                     f.write("\n")
                 f.write(f"{text}\n")
+    if skills:
+        # The security skill battery over what the model just wrote. The raw
+        # reading is the one judged: it is the unguarded output - the adapted
+        # variant is steered by the decode rule, not the model. Scans are
+        # deterministic, so the log stays diffable.
+        scans = []
+        for name, _, texts in samples:
+            variants = texts if not isinstance(texts, str) else [("", texts)]
+            t = next((t for lab, t in variants if lab == "raw"), None)
+            if t is None and variants:
+                t = variants[0][1]
+            if isinstance(t, str) and t.strip():
+                scans.append((name, _skills_scan(t[:4000])))
+        if scans:
+            f.write("\n" + _skills_block(scans) + "\n")
     # the file is closed and complete before the plotter reads it
     refresh_plots()
     return path
@@ -2004,6 +2024,9 @@ def main():
     rd.add_argument("--sample-every", type=float, default=0,
                     help="minutes between writing sample generations")
     rd.add_argument("--sample-log", default="runs/samples.txt")
+    rd.add_argument("--skills", action="store_true",
+                    help="run the security skill battery over every sample "
+                         "and write an <skills> block into the sample log")
     rd.add_argument("--sample-chars", type=int, default=140)
     rd.add_argument("--save-every", type=float,
                     default=_cfg(_c, "training.save_every", 5),
