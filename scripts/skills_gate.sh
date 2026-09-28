@@ -57,11 +57,15 @@ for target in "$@"; do
     report="$OUTDIR/${slug}-${stamp}.json"
 
     echo "[gate] scanning: $target"
-    # shellcheck disable=SC2086
-    if ! "$SKILLSPECTOR" scan "$target" --recursive --no-llm \
-            --format json --output "$report"; then
-        echo "[gate] BLOCKED (scanner error): $target" >&2
-        echo "[gate] report: $report" >&2
+    # skillspector exits non-zero BOTH on findings and on a crashed scan, so
+    # the exit code alone cannot tell the two apart. The report file can:
+    # a scan that produced a parseable report ran to completion, whatever
+    # its exit code says. Classification always comes from the report.
+    "$SKILLSPECTOR" scan "$target" --recursive --no-llm \
+            --format json --output "$report" >/dev/null 2>&1 || true
+
+    if [ ! -s "$report" ]; then
+        echo "[gate] BLOCKED (scanner error, no report): $target" >&2
         rc=1
         continue
     fi
@@ -86,6 +90,15 @@ PY
     sev="$(echo "$verdict" | cut -d'|' -f4)"
     action="$(echo "$verdict" | cut -d'|' -f5)"
 
+    # fail closed on an unparseable report: a verdict we cannot read is a
+    # verdict we cannot trust, and an empty action means the report broke
+    if [ -z "$action" ] || [ "$action" != "PASS" ] && [ "$action" != "BLOCK" ]; then
+        echo "[gate] BLOCKED (unparseable report): $target" >&2
+        echo "[gate] report: $report" >&2
+        rc=1
+        continue
+    fi
+
     if [ "$action" = "BLOCK" ] && [ "$SCAN_ONLY" != "1" ]; then
         echo "[gate] BLOCKED: $n finding(s), max $sev, risk $score ($rec)"
         echo "[gate] report: $report"
@@ -97,7 +110,11 @@ PY
 done
 
 if [ "$rc" -eq 0 ]; then
-    echo "[gate] all targets clean - safe to install"
+    if [ "$SCAN_ONLY" = "1" ]; then
+        echo "[gate] scan-only: reports written - findings above are NOT blocking, review them before installing"
+    else
+        echo "[gate] all targets clean - safe to install"
+    fi
 else
     echo "[gate] at least one target is blocked - do NOT install it" >&2
 fi
