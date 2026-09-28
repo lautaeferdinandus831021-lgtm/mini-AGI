@@ -415,6 +415,13 @@ means nothing gets installed. The same discipline applies to model output:
 `minagi/skills.py` scans what the model writes (security batteries, PII,
 secrets, prompt injection) both in the training log and in `serve.py`.
 
+### Detailed app workflows
+
+Every workflow the app runs — serve & chat, training/reading, live learning,
+the skill supply chain, model-output scanning, and the test gate — is
+documented step by step (trigger, flow, files, failure modes, commands) in
+[`docs/WORKFLOWS.md`](docs/WORKFLOWS.md).
+
 ### Running the tests (sandboxed)
 
 ```bash
@@ -548,6 +555,7 @@ scripts/           skills_gate.sh   security gate for agent skills (scan
                                     comes out exactly as it went in
 artifacts/         FINDINGS_INDEX.md - titles, CWE mapping, uncensored
                    findings and timeline for every security artifact
+docs/              WORKFLOWS.md - every app workflow, detailed end to end
 config.yaml      the settings worth changing
 corpora/         python3 -m corpora all - the whole corpus, downloaded and made
 weights/         one file per expert. this directory is the model.
