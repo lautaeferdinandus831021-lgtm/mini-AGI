@@ -44,17 +44,17 @@ the scanner itself does not emit CWE):
 | E2 | Env Variable Harvesting | Data Exfiltration | **CWE-200** / **CWE-538** (insertion of sensitive information into externally-accessible file) |
 | AE1 | Incomplete referenced artifact analysis | analysis-evasion | **CWE-693** (protection mechanism failure — analysis coverage gap) |
 | MP3 | Memory Manipulation | Memory Poisoning | **CWE-94** (improper control of code generation — agent-context injection class) |
-| AR2 | Anti-Refusal Statement | Anti-Refusal | **CWE-838**? no — maps to **CWE-846**? none: safeguard-bypass class → **CWE-693** |
+| AR2 | Anti-Refusal Statement | Anti-Refusal | **CWE-693** (protection mechanism failure — undermining the agent's refusal safeguards) |
 | PE3 | Credential Access (`.env` harvesting) | Privilege Escalation | **CWE-312** (cleartext storage of sensitive information) / **CWE-538** |
 | PE2 | Sudo/Root Execution; chmod 600 | Privilege Escalation | **CWE-250** (execution with unnecessary privileges) |
 | AS3 | Skill Enumeration | Agent Snooping | **CWE-200** |
 | TM3 | Unsafe Defaults (`REQUIRE_AUTH=false`, `SSL_VERIFY=false`) | Tool Misuse | **CWE-1188** (insecure default initialization) + **CWE-295** (improper cert validation) |
 | SSRF2 | Internal Network Request | SSRF | **CWE-918** (server-side request forgery) |
-| RP1 | Untagged Docker image reference | MCP Rug Pull | **CWE-1357**? — supply-chain pinning gap → **CWE-829** (inclusion of untrusted functionality) |
+| RP1 | Untagged Docker image reference | MCP Rug Pull | **CWE-829** (inclusion of untrusted functionality — untagged/implicit-:latest references can be silently replaced) |
 | LP3/LP4 | Undeclared permissions | MCP Least Privilege | **CWE-250** / **CWE-732** (incorrect permission assignment) |
 | AST4 | `subprocess` module call | Dangerous Code (AST) | **CWE-78** (OS command injection *surface*; not exploitable per se) |
 | OH3 | Unbounded Output | Output Handling | **CWE-770** (allocation of resources without limits) |
-| P4 | Behavior Manipulation ("always prefer this over…") | Prompt Injection | **CWE-1427**? — agent prompt-injection class → **CWE-77**-adjacent (command injection via instruction) |
+| P4 | Behavior Manipulation ("always prefer this over…") | Prompt Injection | instruction-injection class: **CWE-77**-adjacent (agent turns instructions into actions); primary classification **OWASP LLM01: Prompt Injection** |
 | E1 | External Transmission | Data Exfiltration | **CWE-200** |
 
 > IDs with no clean CWE analogue (AR2, P4, RP1) are agent-era weaknesses:
