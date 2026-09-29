@@ -1259,12 +1259,19 @@ def cmd_read(args):
                         if args.save:
                             checkpoint()
                             last_save = time.time()
+                        # the vram figure is CUDA-only, but the pool line
+                        # itself must print everywhere: binding the ternary to
+                        # the whole f-string (as it was) made CPU runs print an
+                        # empty line at every growth/prune decision
+                        vram = (f"vram "
+                                f"{torch.cuda.max_memory_allocated()/1e6:.0f}MB"
+                                if device.type == "cuda" else "")
                         print(f"    pool {pool.n_experts()} experts "
                               f"({'+%d' % rec['grew'] if rec['grew'] else ''}"
                               f"{'-%d' % gone if gone else ''})  "
-                              f"{pool.vram_params()/1e6:.1f}M in VRAM  "
-                              f"vram {torch.cuda.max_memory_allocated()/1e6:.0f}MB"
-                              if device.type == "cuda" else "", flush=True)
+                              f"{pool.vram_params()/1e6:.1f}M in VRAM"
+                              + (f"  {vram}" if vram else ""),
+                              flush=True)
                 if asked_stop or (args.minutes
                                   and (time.time() - t0) / 60 >= args.minutes):
                     break
