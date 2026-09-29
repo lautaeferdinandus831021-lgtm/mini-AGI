@@ -68,6 +68,17 @@ What is covered, and which change each test pins down:
                                 also replays legacy hist checkpoints. Pure
                                 stdlib, always runs.
 
+  8. minagi/knowledge           the report-knowledge store: records validate
+                                hard at save time (required fields, status /
+                                report_type enums, date and id formats,
+                                timeline/evidence shapes), writes are atomic
+                                tmp+rename and never overwrite silently,
+                                list/search/timeline answer questions over the
+                                store (conjunctive keyword search, status and
+                                target filters, newest-first timeline), and
+                                to_markdown() renders the triager-readable
+                                report back out. Pure stdlib, always runs.
+
 Exit code 0 iff no check failed. Sections that cannot run in this environment
 print SKIP lines and count as neither pass nor failure.
 """
@@ -626,6 +637,83 @@ legacy = Plasticity.restore({"hist": [1.0] * 20, "scale": 0.5, "step": 9})
 check(legacy.scale == 0.5 and legacy.i == 20.0 and legacy.step == 9,
       "restore() replays a legacy hist checkpoint")
 check("rate x" in Plasticity().describe(), "describe() reports the rate")
+
+# ---------------------------------------------------------------------------
+print("== 8. minagi/knowledge store ==")
+import tempfile as _td
+
+_kd = os.path.join(_td.mkdtemp(prefix="know-"), "records")
+os.environ["KNOWLEDGE_DIR"] = _kd
+import importlib
+import minagi.knowledge as kn
+importlib.reload(kn)          # pick up the KNOWLEDGE_DIR set above
+
+BASE = {
+    "id": "demo-a", "title": "A demo report", "program": "prog", "target": "t",
+    "report_type": "verification", "status": "draft", "severity": "none",
+    "summary": "what happened and why it matters",
+    "cwe": ["CWE-416"], "date_filed": "2026-09-01", "date_closed": "",
+    "timeline": [{"date": "2026-09-01", "event": "filed"}],
+    "key_facts": ["the fact"], "evidence": [{"path": "e/", "note": "n"}],
+    "commands": [], "lessons": [], "references": [], "related": [],
+}
+
+check(kn.validate(dict(BASE)) is not None,
+      "a complete record validates")
+for field, bad in [("status", "closed"), ("report_type", "other"),
+                   ("date_filed", "Sept 1"), ("id", "Bad Slug")]:
+    r = dict(BASE)
+    r[field] = bad
+    try:
+        kn.validate(r)
+        check(False, f"bad {field} rejected")
+    except kn.RecordError:
+        check(True, f"bad {field} rejected")
+r = dict(BASE)
+del r["key_facts"]
+try:
+    kn.validate(r)
+    check(False, "a missing required field is rejected")
+except kn.RecordError:
+    check(True, "a missing required field is rejected")
+r = dict(BASE)
+r["timeline"] = [{"date": "2026-09-01"}]
+try:
+    kn.validate(r)
+    check(False, "a timeline entry without an event is rejected")
+except kn.RecordError:
+    check(True, "a timeline entry without an event is rejected")
+
+kn.save(dict(BASE))
+try:
+    kn.save(dict(BASE))
+    check(False, "save never overwrites silently")
+except kn.RecordError:
+    check(True, "save never overwrites silently")
+check(os.path.exists(os.path.join(_kd, "demo-a.json"))
+      and not os.path.exists(os.path.join(_kd, "demo-a.json.tmp")),
+      "the atomic write leaves the record, never the tmp file")
+
+second = dict(BASE, id="demo-b", status="resolved", date_filed="2026-08-01",
+              title="An older resolved one",
+              timeline=[{"date": "2026-08-01", "event": "older event"}],
+              key_facts=["nothing to see here"])
+kn.save(second)
+check([r["id"] for r in kn.list_records()] == ["demo-b", "demo-a"],
+      "list sorts by date_filed, undated last")
+check([r["id"] for r in kn.list_records(status="resolved")] == ["demo-b"],
+      "the status filter answers 'what is still open'")
+check(kn.search("demo") and not kn.search("demo", status="withdrawn"),
+      "search ANDs keywords with the status filter")
+check([e["id"] for e in kn.timeline()][:1] == ["demo-a"],
+      "the merged timeline runs newest-first")
+check(kn.stats()["records"] == 2, "stats counts the store")
+md = kn.to_markdown(kn.load("demo-a"))
+check("# A demo report" in md and "CWE-416" in md and "## Timeline" in md,
+      "to_markdown renders the triager-readable report")
+kn.save(dict(BASE, id="demo-a", title="replaced on purpose"), overwrite=True)
+check(kn.load("demo-a")["title"] == "replaced on purpose",
+      "overwrite=True replaces an existing record on purpose")
 
 # ---------------------------------------------------------------------------
 print()

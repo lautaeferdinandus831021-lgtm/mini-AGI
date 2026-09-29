@@ -1,0 +1,46 @@
+{
+  "id": "crypto-graphql-negative",
+  "title": "pay.crypto.com/graphql limit & control assessment - negative result",
+  "program": "crypto.com bug bounty",
+  "target": "https://pay.crypto.com/graphql",
+  "report_type": "negative-result",
+  "status": "resolved",
+  "severity": "none",
+  "cwe": [],
+  "date_filed": "",
+  "date_closed": "2026-09-26",
+  "summary": "No reportable findings. All probed DoS/limit controls are active and enforce correctly. Every verdict is derived from the raw response body of the target - no conclusion comes from a status code, a timeout, or a template. Nothing was submitted because there is nothing to report; the assessment itself is the deliverable.",
+  "key_facts": [
+    "15 requests total, sequential, sleep 1-2s; concurrency, sustained load, rate-limit probing and token enumeration excluded on purpose (volumetric DoS is out of scope for bounty programs).",
+    "Complexity budget enforced at exactly 250 (500 aliased fields rejected); query size rejected at ~10 KB; cyclic fragments rejected pre-execution.",
+    "Batching NOT SUPPORTED at any size - the endpoint does not accept operation arrays, so batch amplification is impossible regardless of per-operation limits (stricter than the 'batching enabled' claim tested against).",
+    "Introspection blocked in all 3 variants; field dedup spec-compliant; error hygiene clean (no stack traces, no internal paths).",
+    "Verdicts byte-identical across the 2026-09-26 run and the 2026-09-28 v5 re-run; draft-report replica 4/4 standard_validation with the auth-gate confirmed."
+  ],
+  "timeline": [
+    {"date": "2026-09-26", "event": "Negative assessment executed: 8 controls verified active, zero findings (FINAL_NEGATIVE_RESULT.md)"},
+    {"date": "2026-09-28", "event": "v5 suite re-run byte-identical to 09-26"},
+    {"date": "2026-09-28", "event": "Draft-report replica 4/4 standard_validation; auth-gate confirmed"}
+  ],
+  "evidence": [
+    {"path": "crypto_assessment/FINAL_NEGATIVE_RESULT.md", "note": "authoritative negative assessment with verbatim server responses"},
+    {"path": "crypto_v5_1790447040/", "note": "first v5 suite run (09-26)"},
+    {"path": "crypto_v5_1790574838/", "note": "re-run (09-28), byte-identical verdicts"},
+    {"path": "crypto_batch_check_1790447900/", "note": "batch probe evidence"},
+    {"path": "crypto_draft_replika_1790576708/", "note": "draft-report replica run"},
+    {"path": "crypto_draft_replica.sh", "note": "replica harness"}
+  ],
+  "commands": [
+    "bash crypto_v5.sh",
+    "bash crypto_draft_replica.sh"
+  ],
+  "lessons": [
+    "A negative result is a result: record it with the same rigor as a finding, or the same ground gets re-ploughed later.",
+    "Never classify from a status code or a timeout - every verdict came from the raw response body.",
+    "Re-run the suite before writing anything down: byte-identical verdicts are what make the conclusion durable."
+  ],
+  "references": [
+    "crypto.com bug bounty program rules (volumetric DoS out of scope)"
+  ],
+  "related": []
+}

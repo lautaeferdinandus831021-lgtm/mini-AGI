@@ -4,7 +4,8 @@ Every workflow the app runs, documented end to end: trigger, step-by-step
 flow, the files involved, failure modes, and the command that drives it.
 Companion to the architecture overview in `README.md`; the security decisions
 and CWE mappings referenced here are indexed in
-[`artifacts/FINDINGS_INDEX.md`](../artifacts/FINDINGS_INDEX.md).
+[`artifacts/FINDINGS_INDEX.md`](../artifacts/FINDINGS_INDEX.md) and stored as
+queryable records under `knowledge/` (Workflow 7, `python3 -m minagi.knowledge`).
 
 ---
 
@@ -219,6 +220,48 @@ discipline. The suite encodes them so they cannot come back quietly.
 
 ---
 
+## Workflow 7 — Report knowledge management (recall, not just records)
+
+**Trigger:** after any bounty/assessment report is produced, and whenever a
+question about past work needs an answer.
+
+```
+a report lands (submission, verification, negative result, gate trial)
+   ▼
+minagi/knowledge.py save()  →  knowledge/<id>.json
+   ├─ validate() rejects anything a query would trip over: required fields,
+   │    status/report_type enums, YYYY-MM-DD dates, slug ids, timeline and
+   │    evidence shapes - the enum a filter runs on cannot silently drift
+   └─ atomic write (tmp + rename, the store.py discipline); no silent
+        overwrite - replace on purpose with overwrite=True
+
+recall, when it is needed:
+   ├─ python3 -m minagi.knowledge list [--status S] [--target T] [PATTERN]
+   ├─ python3 -m minagi.knowledge search WORD... [--status S]   (AND, full text)
+   ├─ python3 -m minagi.knowledge show ID [--markdown]  (triager-readable)
+   ├─ python3 -m minagi.knowledge timeline [--status S] (merged, newest first)
+   ├─ python3 -m minagi.knowledge stats                 (where do we stand)
+   └─ python3 -m minagi.knowledge add FILE.json [--overwrite]
+
+the record is the unit of knowledge: title/program/target/status/CWE/dates,
+a timeline of dated facts, key_facts that carry the conclusions, evidence
+pointers (gitignored raw proof stays where it is), regeneration commands,
+and lessons - the part worth keeping forever.
+```
+
+Seeded from the real tracks: `curl-referer-uaf` (H1 #3971462,
+n/a-informational), `crypto-graphql-negative` (resolved, nothing to report),
+`nvidia-skills-gate-trial` (resolved, 2 installed / 10 blocked).
+
+**Failure modes (documented in-code):**
+- A record that would sort wrongly or render half a report is worse than one
+  that refuses to be saved - validation is at write time, not read time.
+- A broken record on disk is skipped by reads, never fatal to the store.
+
+**Files:** `minagi/knowledge.py`, `knowledge/*.json`.
+
+---
+
 ## Workflow map (who calls whom)
 
 ```
@@ -248,6 +291,7 @@ discipline. The suite encodes them so they cannot come back quietly.
 | Serve & chat | `python3 serve.py --port 8080` |
 | Train/read files | `python3 train.py read <dir> --save --skills` |
 | Scan a skill before installing | `bash scripts/skills_gate.sh <target>` |
+| Recall a past report / its timeline | `python3 -m minagi.knowledge search|show|timeline …` |
 | Install a gated skill | `npx skills add NVIDIA/skills -s <skill> -y` |
 | Scan model output ad hoc | `python3 -m minagi.skills scan --input f.txt` |
 | List every eval | `python3 -m minagi.skills list` |
