@@ -1,0 +1,51 @@
+{
+  "id": "curl-referer-uaf",
+  "title": "libcurl CURLOPT_REFERER use-after-free - independent verification and regression window",
+  "program": "HackerOne (curl)",
+  "target": "libcurl lib/setopt.c (CURLOPT_REFERER handler)",
+  "report_type": "verification",
+  "status": "n/a-informational",
+  "severity": "none",
+  "cwe": ["CWE-416", "CWE-908", "CWE-200"],
+  "date_filed": "2026-09-15",
+  "date_closed": "",
+  "summary": "Original submission H1 #3971462 was closed as Informative. The memory error itself is real, deterministic and independently reproduced (2/2 on the vulnerable commit); the closure rests on the trigger being an application-side pointer round-trip AND on the bug already being fixed upstream before it was reported. The surviving deliverable is the verified regression window, actionable for distro maintainers and packagers. No part of the follow-up asks for a reopen.",
+  "key_facts": [
+    "Free-then-read ordering introduced 2026-06-01 by commit ff300ac4aa; fixed 2026-08-27 by d0247689 (CURLINFO_REFERER, test 2397, closes #22709) - 19 days before the 2026-09-15 submission.",
+    "PoC reproduces deterministically on ff300ac4aa (2/2) and is clean on fixed HEAD (2/2); tcache demo shows stale bytes reused as strlen=5 (ASLR-varied, pattern-consistent).",
+    "Regression window for packagers: ff300ac4aa (2026-06-01) through d0247689 (2026-08-27).",
+    "A stale incremental build produced a round-1 false negative (PoC looked fixed on the vulnerable commit); fresh-build discipline restored 2/2 reproducibility on the 2026-09-28 retest.",
+    "REPORT_V2.md documents what remains verifiably true without requesting a reopen."
+  ],
+  "timeline": [
+    {"date": "2026-01-01", "event": "#3774279 - referer dangling-read after setopt replaces/clears it (prior art)"},
+    {"date": "2026-06-01", "event": "ff300ac4aa 'setopt: defref the old referer when setting a new' introduces the free-then-read ordering"},
+    {"date": "2026-08-27", "event": "d0247689 'setopt: allow setting a referer from CURLINFO_REFERER' fixes it"},
+    {"date": "2026-09-15", "event": "#3971462 filed inside the vulnerable window; closed as Informative"},
+    {"date": "2026-09-26", "event": "Independent verification: PoC reproduces on ff300ac4aa, fixed HEAD clean; REPORT_V2 published"},
+    {"date": "2026-09-28", "event": "Retest rounds 1-2: vuln 2/2, fixed 2/2; round-1 stale-build false negative caught; tcache retest recorded"}
+  ],
+  "evidence": [
+    {"path": "curl_referer_uaf/REPORT.md", "note": "original submission write-up"},
+    {"path": "curl_referer_uaf/REPORT_V2.md", "note": "independent verification, timeline, regression window"},
+    {"path": "curl_referer_uaf/evidence/poc_vuln_commit_output.txt", "note": "PoC output on ff300ac4aa"},
+    {"path": "curl_referer_uaf/evidence/poc_fixed_head_output.txt", "note": "clean output on fixed HEAD"},
+    {"path": "curl_referer_uaf/evidence/tcache_demo_output.txt", "note": "stale heap bytes observation"},
+    {"path": "curl_referer_uaf/evidence/retest_20260928/", "note": "2x2 retest rounds + tcache ASAN retest"}
+  ],
+  "commands": [
+    "bash run_on_ubuntu.sh  # from curl_referer_uaf/, on a native box (needs a fresh build of both commits)"
+  ],
+  "lessons": [
+    "Always verify against a FRESH build: a stale incremental build made the PoC look fixed and nearly shipped a false negative.",
+    "A closed-as-Informative finding still yields a deliverable: the verified regression window is directly actionable for distro maintainers even when the upstream tracker will not act.",
+    "Accept triage outcomes with evidence instead of arguing: document what remains true, never ask for a reopen."
+  ],
+  "references": [
+    "HackerOne #3971462",
+    "HackerOne #3774279",
+    "curl commit ff300ac4aa (introducing)",
+    "curl commit d0247689 / PR #22709 (fixing)"
+  ],
+  "related": []
+}

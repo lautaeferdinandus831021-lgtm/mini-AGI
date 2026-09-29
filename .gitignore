@@ -22,3 +22,6 @@ runs/corpus_index.json
 
 # skillspector scan reports
 .skillspector/
+
+# knowledge store tmp writes (the records themselves are versioned)
+knowledge/*.tmp
