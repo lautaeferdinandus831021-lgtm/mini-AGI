@@ -29,6 +29,24 @@ What is covered, and which change each test pins down:
                                 touched, and a CUDA environment asserting the
                                 vram figure appears. Pins PR #12. Always runs.
 
+  4. minagi/stream invariants  the reader hands the model pos_offset == seen
+                                (the rotary alignment invariant), targets are
+                                inputs shifted by one, the window resets before
+                                running past the context; trim keeps the newest
+                                cache positions and detach drops the graph;
+                                ramp_context is monotone, bounded and lands on
+                                `end` at the warm fraction. Needs torch, skips
+                                cleanly without it.
+
+  5. minagi/paged contracts    Tiers LRU eviction and dirty writeback (weights
+                                fp32, moments as bf16 bits, read-only never
+                                writes); PagedPool.dying() staleness math with
+                                its trial waiver and age clamp; swap_to keeps
+                                residents in their slots by identity; growth
+                                names files by uid and prune deletes by
+                                staleness WITHOUT renumbering the survivors.
+                                Needs torch, skips cleanly without it.
+
 Exit code 0 iff no check failed. Sections that cannot run in this environment
 print SKIP lines and count as neither pass nor failure.
 """
@@ -176,6 +194,228 @@ if m:
 
 check(re.search(r"'-%d' % gone if gone else ''", src) is not None,
       "prune (-N) variant still wired")
+
+# ---------------------------------------------------------------------------
+try:
+    import torch
+except ImportError:
+    torch = None
+
+print("== 4. minagi/stream invariants ==")
+if torch is None:
+    print("  SKIP minagi/stream (torch not installed)")
+else:
+    import types
+
+    import numpy as np
+
+    from minagi import stream as mstream
+
+    BLOCK, CHUNK, NSLOT = 64, 16, 3
+
+    class FakeModel:
+        """The only surface Reader touches: empty_caches, cfg.block, and a
+        forward that reports the pos_offset it was handed."""
+
+        def __init__(self):
+            self.cfg = types.SimpleNamespace(block=BLOCK)
+            self.saw = []
+            self.caches_seen = []
+
+        def empty_caches(self):
+            return [{"k": None, "v": None} for _ in range(NSLOT)]
+
+        def __call__(self, x, y, caches=None, pos_offset=0):
+            self.saw.append(pos_offset)
+            self.caches_seen.append(caches)
+            for c in caches or []:
+                # k and v are always written as a pair - that is the
+                # contract Attention.forward maintains, and detach_caches /
+                # trim_caches rely on it
+                c["k"] = torch.zeros(1, 1, pos_offset + x.shape[1], 2)
+                c["v"] = torch.zeros(1, 1, pos_offset + x.shape[1], 2)
+            return None, float(pos_offset) + float(x.float().mean())
+
+    data = np.arange(200, dtype=np.int64)
+
+    r = mstream.Reader(FakeModel(), data, "t", CHUNK, BLOCK, "cpu")
+    r.pos = 0
+    x, y = r.next_chunk()
+    check(torch.equal(x, torch.from_numpy(data[:CHUNK]).unsqueeze(0)),
+          "next_chunk x = data[pos:pos+chunk]")
+    check(torch.equal(y, torch.from_numpy(data[1:CHUNK + 1]).unsqueeze(0)),
+          "targets are the inputs shifted by one")
+
+    model = FakeModel()
+    r = mstream.Reader(model, data, "t", CHUNK, BLOCK, "cpu")
+    for _ in range(5):
+        r.step(learn=False)
+    check(model.saw == [0, CHUNK, 2 * CHUNK, 3 * CHUNK, 0],
+          "pos_offset counts from 0 wherever the corpus window starts, "
+          "and resets before the tables end",
+          f"got {model.saw}")
+    check(r.seen == CHUNK, "seen restarts with the new window")
+    check(model.caches_seen[0] is model.caches_seen[3],
+          "one cache carries across the chunks of a window")
+    check(model.caches_seen[4] is not model.caches_seen[0],
+          "reset builds a fresh cache for the next window")
+
+    k = torch.arange(10, dtype=torch.float32).view(1, 1, 10, 1) \
+        .expand(1, 1, 10, 4).contiguous()
+    caches = [{"k": k, "v": torch.zeros(1, 1, 10, 4)}]
+    mstream.trim_caches(caches, 4)
+    check(caches[0]["k"].shape[-2] == 4,
+          "trim_caches keeps `keep` positions")
+    check(torch.equal(caches[0]["k"][0, 0, :, 0],
+                      torch.tensor([6., 7., 8., 9.])),
+          "trim keeps the NEWEST positions, not the oldest")
+    short = [{"k": torch.zeros(1, 1, 6, 4), "v": torch.zeros(1, 1, 6, 4)}]
+    mstream.trim_caches(short, 10)
+    check(short[0]["k"].shape[-2] == 6,
+          "trim_caches never pads a short cache")
+
+    base = torch.randn(2, 2, 3, 4, requires_grad=True)
+    caches = [{"k": base * 2, "v": base * 3}]
+    check(caches[0]["k"].grad_fn is not None,
+          "a cache entry carries the graph before detach")
+    mstream.detach_caches(caches)
+    check(caches[0]["k"].grad_fn is None and not caches[0]["k"].requires_grad,
+          "detach_caches drops the autograd graph, keeps the values")
+
+    rc = mstream.ramp_context
+    check(rc(0, 1000, 512, 4096) >= 512, "ramp starts at the floor")
+    check(rc(1000, 1000, 512, 4096) == 4096,
+          "ramp lands on end once the warm fraction has passed")
+    vals = [rc(s, 1000, 512, 4096) for s in range(0, 1001, 50)]
+    check(all(b >= a for a, b in zip(vals, vals[1:])), "ramp is monotone")
+    check(all(512 <= v <= 4096 for v in vals), "ramp stays bounded")
+    check(all(v % 256 == 0 for v in vals),
+          "ramp honours the granularity (no staircase-free jumps)")
+    check(rc(10, 1000, 512, 100) == 100,
+          "end <= start degenerates to end")
+
+# ---------------------------------------------------------------------------
+print("== 5. minagi/paged contracts ==")
+if torch is None:
+    print("  SKIP minagi/paged (torch not installed)")
+else:
+    import tempfile
+
+    import numpy as _np
+
+    from minagi.paged import PagedPool, Tiers
+    from minagi.precision import unpack_bf16
+
+
+    def _ent(i):
+        return {"w1": torch.full((16, 8), float(i)),
+                "w3": torch.full((16, 8), float(i)),
+                "w2": torch.full((8, 16), float(i))}
+
+
+    tiers_path = tempfile.mkdtemp(prefix="pp-tiers-")
+    t = Tiers(tiers_path, 8, 16, ram_capacity=2, device="cpu")
+    for i in range(4):
+        t.put(i, _ent(i), dirty=True)
+    check(len(t.ram) == 2 and set(t.ram) == {2, 3},
+          "LRU holds only ram_capacity entries, newest kept")
+    check(t.evictions == 2 and t.writebacks == 2,
+          "evicted dirty entries are written back")
+    z = _np.load(os.path.join(tiers_path, "e00000.npz"))
+    check(z["w1"].dtype == _np.float32, "weights write back fp32")
+    got = t.fetch(0)
+    check(float(got["w1"][0, 0]) == 0.0,
+          "a fetched entry is the one that was put")
+    t.fetch(3)
+    check(t.hits == 1, "fetch of a cached entry counts a hit")
+    t.put(4, _ent(4), dirty=True)
+    check(set(t.ram) == {3, 4},
+          "fetch refreshes recency: the stale entry is evicted, not the fresh one")
+
+    e = _ent(7)
+    e["w1_m"] = torch.randn(16, 8)
+    t.put(7, e, dirty=True)
+    t.put(8, _ent(8), dirty=True)     # evicts 4
+    t.put(9, _ent(9), dirty=True)     # evicts 7 -> writes it back
+    z = _np.load(os.path.join(tiers_path, "e00007.npz"))
+    check(z["w1_m"].dtype == _np.int16, "Adam moments write back as bf16 bits")
+    back = unpack_bf16(z["w1_m"])
+    check(torch.allclose(back, e["w1_m"], rtol=0.01, atol=0.02),
+          "bf16 moment round-trip stays within its own rounding")
+
+    ro_path = tempfile.mkdtemp(prefix="pp-ro-")
+    ro = Tiers(ro_path, 8, 16, ram_capacity=1, device="cpu", read_only=True)
+    ro.put(0, _ent(0), dirty=True)
+    ro.flush()
+    check(not ro.dirty and not os.path.exists(os.path.join(ro_path, "e00000.npz")),
+          "read-only tiers never mark dirty and never write")
+
+    pool_path = tempfile.mkdtemp(prefix="pp-pool-")
+    for i in range(6):
+        _np.savez(os.path.join(pool_path, "e%05d.npz" % i), **_ent(i))
+    pp = PagedPool(pool_path, d_model=8, d_ff=16, n_experts=6,
+                   resident=4, ram_capacity=8, device="cpu")
+    check(pp.n_experts() == 6 and pp.n_routable() == 4,
+          "n_experts answers the pool, n_routable the working set")
+    pp.segments = 100
+    pp.now = 1000
+    pp.trial = 400
+    d = pp.dying()
+    check(torch.isclose(d, torch.full((6,), 2.5)).all(),
+          "dying() = time unaddressed over the survival window")
+    pp.born[5] = 800
+    check(float(pp.dying()[5]) == 0.0,
+          "an expert inside its trial is not dying")
+    pp.born[5] = 590                 # 410 steps old: past the trial, barely
+    check(torch.isclose(pp.dying()[5], torch.tensor(1.025)),
+          "a barely-admissible expert is capped by its own age, not scored "
+          "as if it had never been seen")
+    fresh = PagedPool(tempfile.mkdtemp(prefix="pp-fresh-"), d_model=8,
+                      d_ff=16, n_experts=6, resident=2, device="cpu")
+    check(bool((fresh.dying() == 0).all()),
+          "dying() is all zeros before the run starts")
+
+    pp3 = PagedPool(pool_path, d_model=8, d_ff=16, n_experts=6,
+                    resident=3, ram_capacity=8, device="cpu")
+    pp3.swap_to([2, 0, 1])
+    check(pp3.slots == [2, 0, 1], "swap_to places the requested set")
+    check(pp3.swap_to([1, 0, 2]) == 0 and pp3.slots == [2, 0, 1],
+          "the same set in a new order is a no-op (slots belong to experts)")
+    loads = pp3.swap_to([3, 0, 1])
+    check(pp3.slots == [3, 0, 1], "only the newcomer changes slots")
+    check(loads == 1, "exactly one expert is fetched from the host")
+    check(pp3.swaps == 2, "the no-op reorder did not count as a swap")
+
+    n0 = pp3.n_experts()
+    pp3.add_experts(2, recombine=3, step=10, birth_gate=0.01)
+    uids = pp3.uid.tolist()
+    check(pp3.n_experts() == n0 + 2, "add_experts grows the pool")
+    check(len(set(uids)) == pp3.n_experts(), "every expert keeps a unique uid")
+    check(max(uids) == n0 + 1, "new experts are named by fresh uids, not positions")
+    check(pp3.segment_router.weight.shape[0] == pp3.n_experts(),
+          "the segment router gains a row per expert")
+    check(bool((pp3.gate[n0:] == 0.01).all()), "newcomers are born at birth_gate")
+    files = os.listdir(pool_path)
+    check(f"e{uids[n0]:05d}.npz" in files and f"e{uids[n0 + 1]:05d}.npz" in files,
+          "growth writes one file per new expert, named by uid")
+
+    before = uids
+    # last_seen is already right: every swap_to stamps the requested set with
+    # the segment it ran in (even the no-op reorder), so positions 0-3 read as
+    # just-asked and 4-7 as never-chosen. Window = survival x segments/step =
+    # 300 x 3/1000 = 0.9 segments - shorter than any non-resident's gap.
+    target_uid = before[4]
+    gone = pp3.prune(1000, survival=300)
+    check(gone == 5 and pp3.n_experts() == 3,
+          "prune removes exactly the stale, non-resident experts")
+    after = pp3.uid.tolist()
+    check(target_uid not in after, "the stale expert is gone")
+    check(after == [u for u in before if u in after],
+          "survivors keep their uid AND their order (nothing renumbered)")
+    check(not os.path.exists(os.path.join(pool_path, f"e{target_uid:05d}.npz")),
+          "the deleted expert's file goes with it")
+    check(pp3.segment_router.weight.shape[0] == pp3.n_experts(),
+          "the segment router is rebuilt to the surviving count")
 
 # ---------------------------------------------------------------------------
 print()
