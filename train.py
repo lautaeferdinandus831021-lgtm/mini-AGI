@@ -1319,7 +1319,7 @@ def cmd_read(args):
                       ctx_now, ctx_max, context_gain(),
                       seen / max(time.time() - t0, 1e-6),
                       float(np.mean(grads)) if grads else None, args.clip,
-                      skills=args.skills)
+                      plast.state(), skills=args.skills)
         print(f"  final samples in {args.sample_log}")
 
     if args.save:

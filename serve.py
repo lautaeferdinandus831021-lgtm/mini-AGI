@@ -23,6 +23,7 @@ Binds to localhost.
 """
 
 import argparse
+import codecs
 import json
 import os
 import sys
@@ -39,6 +40,7 @@ from flask import Flask, Response, jsonify, request
 from minagi.recur import load_any
 from minagi.tokenizer import ByteTokenizer
 from minagi.identity import APP_NAME as _APP_NAME
+from minagi.identity import banner as _app_banner
 from minagi.skills import GROUPS as _SKILL_GROUPS
 from minagi.skills import run_skill as _skill_run
 from minagi.skills import scan as _skill_scan
@@ -301,6 +303,10 @@ def stream(prompt, max_new):
 
     cur = out[:, -1:]
     produced = []
+    # one UTF-8 character at a time can span several model tokens, so the
+    # incremental decoder holds a partially-seen multi-byte sequence back
+    # until it is complete
+    dec = codecs.getincrementaldecoder("utf-8")("replace")
     # The prompt has already chosen the working set above. Report it, so the
     # page starts the reply showing what is actually answering it.
     yield {"swap": {"at": 0, "moved": None, "pool": resident_experts()}}
@@ -341,7 +347,12 @@ def stream(prompt, max_new):
         text = tok.decode(produced)
         if text.endswith(B1):
             break
-        yield {"t": tok.decode([produced[-1]])}
+        # the new TOKEN, not the new byte: a byte at a time is not a
+        # character at all, so everything non-ASCII arrived at the page as
+        # U+FFFD and entered the live-learning stream the same way
+        piece = dec.decode(bytes(produced[-1:]))
+        if piece:
+            yield {"t": piece}
 
 
 def remember(user_text, bot_text):
@@ -493,7 +504,7 @@ PAGE = r'''<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>WhiteHat_mini-AGI</title>
+<title>@@APP_NAME@@</title>
 <style>
   :root{
     --bg:#ffffff; --fg:#1f2328; --dim:#6b7280; --line:#e5e7eb;
@@ -582,7 +593,7 @@ PAGE = r'''<!doctype html>
 </style></head>
 <body>
 <header>
-  <b>WhiteHat_mini-AGI</b>
+  <b>@@APP_NAME@@</b>
   <span class="sp"></span>
   <button id="reset">New chat</button>
 </header>
@@ -613,7 +624,7 @@ PAGE = r'''<!doctype html>
 </footer>
 
 <script>
-const APP_NAME = 'WhiteHat_mini-AGI';  // kept in sync with minagi/identity.py
+const APP_NAME = '@@APP_NAME@@';  // rendered from minagi/identity.py
 const thread = document.getElementById('thread');
 const log    = document.getElementById('log');
 const q      = document.getElementById('q');
@@ -855,7 +866,7 @@ empty(); q.focus();
 // tall box - the input opened at its maximum every time.
 requestAnimationFrame(grow);
 </script>
-</body></html>'''
+</body></html>'''.replace("@@APP_NAME@@", _APP_NAME)
 
 
 def main():
@@ -889,7 +900,7 @@ def main():
                     help="what the forward computes in; defaults to whatever "
                          "config.yaml trains with")
     args = ap.parse_args()
-
+    print(_app_banner())
     from minagi.config import get as _g, load as _lc
     from minagi.precision import set_compute_dtype
     set_compute_dtype(args.precision

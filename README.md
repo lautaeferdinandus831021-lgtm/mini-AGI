@@ -436,6 +436,11 @@ report, against a stub scanner and a synthetic skill built in the sandbox),
 and a final check that `git status` and `git diff` are exactly as they were
 before the run - the working tree comes out as clean as it went in.
 
+Running the app for real (train + serve, optionally on a GPU VM) is
+documented step by step in [`docs/CLOUDSHELL.md`](docs/CLOUDSHELL.md),
+written against [Google Cloud Shell](https://shell.cloud.google.com/?pli=1&show=ide%2Cterminal)
+- a free ephemeral VM that needs nothing but a Google account.
+
 Every tool takes `--ckpt weights` - the directory is the model, and there are no `.pt` files to keep track of.
 
 ## Initialization
