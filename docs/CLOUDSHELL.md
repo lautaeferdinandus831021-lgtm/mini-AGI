@@ -84,20 +84,24 @@ bash scripts/test_sandbox.sh
 Expected tail of the output:
 
 ```
-== 5. working tree untouched by the whole run ==
+== 6. working tree untouched by the whole run ==
   PASS git status unchanged (0 untracked/marked entries before and after)
   PASS git diff fingerprint unchanged by the run
-[result] PASS=11 FAIL=0
+[result] PASS=12 FAIL=0
 ```
 
-Eleven passes, zero failures, and the working tree byte-identical to `HEAD`
-afterwards. (In an environment without torch the store-surface check skips
-and the count reads PASS=10 FAIL=0.) `KEEP=1 bash scripts/test_sandbox.sh`
-keeps the throwaway checkout under `/tmp` for inspection.
+Twelve passes, zero failures, and the working tree byte-identical to `HEAD`
+afterwards. (In an environment without torch or flask the targeted
+serve-route checks and the store-surface check skip, and the count reads
+PASS=10 FAIL=0.) `KEEP=1 bash scripts/test_sandbox.sh` keeps the throwaway
+checkout under `/tmp` for inspection.
 
-This is the same gate that runs in the project sandbox — five sections:
-py_compile of the whole tree, the full `minagi.skills` regression, all five
-exit paths of the `skills_gate.sh` security gate, the `minagi.store` surface
+The gate has six sections: py_compile of the whole tree, the full
+`minagi.skills` regression, all five exit paths of the `skills_gate.sh`
+security gate, the targeted regression tests for the most recent fixes
+(`tests/test_targeted.py` - serve.py identity and routes, whole-character
+SSE decoding, the train.py growth-line print on CPU and CUDA; sections that
+need torch or flask skip cleanly without them), the `minagi.store` surface
 (now **executed**, not skipped, because torch is present), and the tree
 hygiene check.
 

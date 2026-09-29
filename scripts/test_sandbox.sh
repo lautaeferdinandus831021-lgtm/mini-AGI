@@ -14,8 +14,12 @@
 #                          SCAN_ONLY, fail-closed no-scanner, unparseable
 #                          report) against a synthetic skill and a stub
 #                          scanner built INSIDE the sandbox
-#   [4] store surface      minagi.store contract (runs only if torch exists)
-#   [5] tree hygiene       git status/diff unchanged by the whole run
+#   [4] targeted           tests/test_targeted.py - regressions for the most
+#                          recent fixes: serve.py identity rendering and
+#                          routes, whole-character SSE decoding, the train.py
+#                          growth-line print on both CPU and CUDA
+#   [5] store surface      minagi.store contract (runs only if torch exists)
+#   [6] tree hygiene       git status/diff unchanged by the whole run
 #
 # Usage:
 #   bash scripts/test_sandbox.sh            # full suite
@@ -39,6 +43,14 @@ echo "[sandbox] $SB"
 # byte-identical checkout to run against: even a misbehaving test that
 # writes next to the code cannot touch the working tree
 git -C "$REPO" archive HEAD | tar -x -C "$SB"
+# the checkout is HEAD, but the tests must cover whatever the developer has
+# right now - so the working tree's tests/ is copied over it. Tests are
+# read-only against the tree, so this cannot smuggle anything in; it just
+# means a test file being written at this moment is the one that runs.
+if [ -d "$REPO/tests" ]; then
+    mkdir -p "$SB/tests"
+    cp -f "$REPO"/tests/*.py "$SB/tests/" 2>/dev/null || true
+fi
 sha_ref="$(git -C "$REPO" status --porcelain | wc -l | tr -d ' ')"
 # snapshot the tree's diff fingerprint: the suite must not alter it, whether
 # the tree started clean or mid-feature
@@ -175,7 +187,23 @@ else
 fi
 
 #-----------------------------------------------------------------------------
-sect "4. store surface (runs only when torch is importable)"
+sect "4. targeted tests (tests/test_targeted.py)"
+#-----------------------------------------------------------------------------
+# every check is a regression for a specific merged fix. Sections whose
+# dependencies are missing (torch, flask) print SKIP and count as neither
+# pass nor failure, so the file contributes exactly ONE pass/fail to this
+# runner wherever it runs.
+if ( cd "$SB" && python3 tests/test_targeted.py ) > "$SB/out/targeted.log" 2>&1; then
+    sed 's/^/  /' "$SB/out/targeted.log"
+    res="$(sed -n 's/^\[result\] //p' "$SB/out/targeted.log")"
+    ok "targeted tests (${res:-no summary line})"
+else
+    sed 's/^/  /' "$SB/out/targeted.log"
+    bad "targeted tests"
+fi
+
+#-----------------------------------------------------------------------------
+sect "5. store surface (runs only when torch is importable)"
 #-----------------------------------------------------------------------------
 if python3 -c "import torch" >/dev/null 2>&1; then
     if ( cd "$SB" && python3 -c "
@@ -191,7 +219,7 @@ else
 fi
 
 #-----------------------------------------------------------------------------
-sect "5. working tree untouched by the whole run"
+sect "6. working tree untouched by the whole run"
 #-----------------------------------------------------------------------------
 now="$(git -C "$REPO" status --porcelain | wc -l | tr -d ' ')"
 if [ "$now" = "$sha_ref" ]; then
