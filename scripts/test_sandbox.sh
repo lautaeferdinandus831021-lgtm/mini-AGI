@@ -18,7 +18,8 @@
 #                          recent fixes: serve.py identity rendering and
 #                          routes, whole-character SSE decoding, the train.py
 #                          growth-line print on both CPU and CUDA, plus
-#                          minagi/stream and minagi/paged invariants
+#                          minagi/stream, minagi/paged, minagi/live and
+#                          minagi/plasticity invariants
 #   [5] store surface      minagi.store contract (runs only if torch exists)
 #   [6] tree hygiene       git status/diff unchanged by the whole run
 #

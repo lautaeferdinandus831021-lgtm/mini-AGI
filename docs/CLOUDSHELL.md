@@ -100,8 +100,8 @@ The gate has six sections: py_compile of the whole tree, the full
 `minagi.skills` regression, all five exit paths of the `skills_gate.sh`
 security gate, the targeted regression tests for the most recent fixes
 (`tests/test_targeted.py` - serve.py identity and routes, whole-character
-SSE decoding, the train.py growth-line print on CPU and CUDA, minagi/stream
-and minagi/paged invariants; sections that
+SSE decoding, the train.py growth-line print on CPU and CUDA, minagi/stream,
+minagi/paged, minagi/live and minagi/plasticity invariants; sections that
 need torch or flask skip cleanly without them), the `minagi.store` surface
 (now **executed**, not skipped, because torch is present), and the tree
 hygiene check.
