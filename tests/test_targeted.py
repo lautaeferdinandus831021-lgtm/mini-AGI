@@ -47,6 +47,27 @@ What is covered, and which change each test pins down:
                                 staleness WITHOUT renumbering the survivors.
                                 Needs torch, skips cleanly without it.
 
+  6. minagi/live (LiveLearner)  the stream steps every `chunk` characters
+                                with pending accounting that survives partial
+                                feeds; the model is called on inputs/targets
+                                shifted by one; buf never exceeds `context`;
+                                the model's train/eval mode survives a step;
+                                grads are cleared even when a step fails; and
+                                save() carries the loaded manifest (step/val)
+                                through instead of writing a blank one - the
+                                vocab-8192-manifest bug the module documents.
+                                Needs torch, skips cleanly without it.
+
+  7. minagi/plasticity          the rate moves in BOTH directions - easing
+                                down without evidence, back up when held-out
+                                improves - but only past MIN_EFF; a regime jump
+                                must persist to confirm and resets the fits;
+                                noise and non-finite evaluations change
+                                nothing; scale stays inside [FLOOR, CEIL];
+                                state() round-trips through restore(), which
+                                also replays legacy hist checkpoints. Pure
+                                stdlib, always runs.
+
 Exit code 0 iff no check failed. Sections that cannot run in this environment
 print SKIP lines and count as neither pass nor failure.
 """
@@ -416,6 +437,195 @@ else:
           "the deleted expert's file goes with it")
     check(pp3.segment_router.weight.shape[0] == pp3.n_experts(),
           "the segment router is rebuilt to the surviving count")
+
+# ---------------------------------------------------------------------------
+print("== 6. minagi/live (LiveLearner) ==")
+if torch is None:
+    print("  SKIP minagi/live (torch not installed)")
+else:
+    import tempfile
+    import types
+    import json as _json
+
+    from minagi.live import LiveLearner, exchange_text
+    from minagi.tokenizer import ByteTokenizer
+
+    tok = ByteTokenizer()
+
+    check(exchange_text(" hi ", " yo ") ==
+          "<user>\nhi\n</user>\n<bot>\nyo\n</bot>\n",
+          "exchange_text marks one turn the way the chat corpus is")
+    check(exchange_text("", "") == "", "an empty exchange is an empty string")
+
+    class TinyModel(torch.nn.Module):
+        """The surface LiveLearner actually uses, plus a pool.* parameter:
+        the optimiser is built with a trunk group and a pool group, and a
+        model without any pool-prefixed parameter would hand AdamW an empty
+        group."""
+
+        def __init__(self):
+            super().__init__()
+            self.cfg = types.SimpleNamespace(block=64, vocab_size=265)
+            self.calls = []
+            self.emb = torch.nn.Embedding(265, 8)
+            self.head = torch.nn.Linear(8, 265)
+            self.pool = torch.nn.Module()
+            self.pool.dummy = torch.nn.Parameter(torch.zeros(1))
+
+        def forward(self, x, y=None, caches=None, pos_offset=0):
+            self.calls.append((x.shape[1], y.shape[1]))
+            logits = self.head(self.emb(x))
+            loss = torch.nn.functional.cross_entropy(
+                logits.reshape(-1, 265), y.reshape(-1))
+            return logits, loss
+
+    tmp = tempfile.mkdtemp(prefix="live-")
+    m = TinyModel()
+    ll = LiveLearner(m, lr=1e-3, chunk=40, context=64, save_every=100,
+                     weights_dir=os.path.join(tmp, "w"),
+                     manifest={"step": 7, "val": 0.5,
+                               "cfg": {"vocab_size": 265, "block": 64}})
+
+    recs = ll.feed("x" * 30, tok)
+    check(recs == [] and ll.pending == 30,
+          "a partial feed takes no step and reports pending")
+    recs = ll.feed("y" * 30, tok)
+    check(len(recs) == 1 and ll.pending == 20 and ll.steps == 1,
+          "crossing `chunk` takes exactly one step and keeps the remainder")
+    check(m.calls[0] == (39, 39),
+          "the model is called on targets = inputs shifted by one (x = buf[:-1])")
+    ll.feed("z" * 60, tok)
+    check(m.calls[-1][0] == 63,
+          "the window caps at `context` (buf trimmed before the step)")
+    check(ll.steps == len(ll.log), "every step is logged once")
+
+    m.eval()
+    ll.feed("w" * 40, tok)
+    check(not m.training, "a step taken from eval mode returns the model to eval")
+    m.train()
+    ll.feed("w" * 40, tok)
+    check(m.training, "a step taken mid-training leaves training on")
+    check(all(p.grad is None for p in m.parameters()),
+          "grads are cleared after every step, success or not")
+
+    class Boom(TinyModel):
+        def forward(self, *a, **k):
+            raise RuntimeError("boom")
+
+    ll2 = LiveLearner(Boom(), chunk=10, context=64,
+                      weights_dir=os.path.join(tmp, "w2"))
+    raised = False
+    try:
+        ll2.feed("q" * 12, tok)
+    except RuntimeError:
+        raised = True
+    check(raised, "a failing model surfaces the error (serve catches it)")
+    check(ll2.pending == 10,
+          "the failed step leaves the stream at its boundary, unreset")
+    check(all(pg.grad is None for pg in ll2.model.parameters()),
+          "grads are cleared even when the step itself fails (zero_grad "
+          "lives in a finally)")
+
+    ll.save()
+    man = _json.load(open(os.path.join(tmp, "w", "manifest.json")))
+    check(man.get("step") == 7 and man.get("val") == 0.5,
+          "save() carries the loaded manifest's step/val through")
+    check(man.get("cfg", {}).get("vocab_size") == 265,
+          "save() carries the manifest cfg through (no blank 8192 manifest)")
+    check(ll.unsaved == 0 and not ll.due_to_save(),
+          "save() resets the unsaved counter")
+
+# ---------------------------------------------------------------------------
+print("== 7. minagi/plasticity rules ==")
+from minagi.plasticity import Plasticity
+
+# warmup: the rate eases in over the first WARMUP optimiser steps
+p = Plasticity()
+for _ in range(10):
+    p.tick()
+check(p.factor() < 1.0, "warmup scales the rate up gradually")
+p2 = Plasticity()
+for _ in range(Plasticity.WARMUP + 1):
+    p2.tick()
+check(p2.factor() == 1.0, "past warmup the factor is the full rate")
+
+# plateau: below MIN_EFF nothing moves, however bad it looks
+p = Plasticity()
+for _ in range(5):
+    p.observe(0.5, 0.01)
+check(p.scale == 1.0, "below MIN_EFF the rate does not move at all")
+check(p.i == 5.0, "the evaluations were still recorded")
+
+# easing DOWN: held-out stuck above the neutral point nudges the rate down,
+# but only once the slow fit has MIN_EFF effective observations
+p = Plasticity()
+for _ in range(int(Plasticity.MIN_EFF) + 4):
+    p.observe(0.5, 0.01)
+check(p.scale < 1.0,
+      "a flat held-out eases the rate down once there is enough evidence")
+check(p.scale >= Plasticity.FLOOR, "the rate never sinks below FLOOR")
+
+# easing UP: held-out steadily improving, confirmed by the fast fit, lifts a
+# dragged-down rate back toward CEIL. CEIL is 1.0, so from a fresh instance
+# the only visible direction is down - start from a lowered scale instead.
+# A perfectly straight series has no residual (sigma = 0), which the fit
+# reports as no verdict - so the series carries a sliver of scatter.
+p = Plasticity.restore({"scale": 0.5})
+for i in range(60):
+    p.observe(0.8 - 0.01 * i + 0.0003 * (i % 2), 0.001)
+check(p.scale > 0.5,
+      "clear, sustained improvement eases the rate up (the two rules are "
+      "symmetric)")
+check(p.scale <= Plasticity.CEIL, "the rate never exceeds CEIL")
+
+# the fast fit can veto the slow one before it has enough observations
+# (MIN_EFF gates the cap only, so this is about the verdict, not the veto)
+p = Plasticity()
+check(p._verdict()[0] == 0.0, "an empty fit has no verdict")
+
+# a REGIME JUMP must persist one evaluation to confirm, then resets both fits
+p = Plasticity()
+for _ in range(20):
+    p.observe(0.5, 0.001)
+check(p.scale < 1.0, "plateau eased the rate down before the jump")
+p.observe(2.0, 0.001)                 # candidate jump: nominated, not confirmed
+check(p.jump_from == 0.5 and p.scale < Plasticity.CEIL,
+      "a single noisy evaluation only nominates a regime change")
+note = p.observe(2.0, 0.001)          # persisted: confirmed
+check(note is not None and p.scale == Plasticity.CEIL and "regime" in note,
+      "a persistent jump steps the rate back up and says so")
+check(p.i == 1.0, "the confirming evaluation is the first in the new fit")
+check(p.jump_from is None, "a confirmed jump consumes its own nomination")
+p.observe(0.4, 0.001)                 # fell straight back: nothing pending
+check(p.jump_from is None, "a fall straight back nominates nothing")
+
+# noise hygiene: missing se and non-finite values change nothing
+p = Plasticity()
+for _ in range(30):
+    p.observe(0.5, None)
+check(len(p.se_hist) == 0 and p._se() == 0.0,
+      "an evaluation with no stated error leaves no noise history")
+check(p.i == 30.0, "evaluations without an error still count toward the fits")
+p.observe(0.5, 0.01)                  # seed the noise history
+check(p.observe(float("nan"), 0.01) is None and p.prev == 0.5
+      and p.i == 31.0,
+      "a non-finite evaluation is ignored entirely")
+check(p.observe(float("inf"), 0.01) is None and p.prev == 0.5,
+      "so is a non-finite one the other way")
+
+# checkpoint round-trip, including the legacy hist replay
+p = Plasticity()
+for _ in range(25):
+    p.observe(0.5 - 0.001 * _, 0.01)
+snap = p.state()
+q = Plasticity.restore(snap)
+check(q.scale == p.scale and q.i == p.i and q.step == p.step and
+      len(q.se_hist) == len(p.se_hist),
+      "state() round-trips through restore()")
+legacy = Plasticity.restore({"hist": [1.0] * 20, "scale": 0.5, "step": 9})
+check(legacy.scale == 0.5 and legacy.i == 20.0 and legacy.step == 9,
+      "restore() replays a legacy hist checkpoint")
+check("rate x" in Plasticity().describe(), "describe() reports the rate")
 
 # ---------------------------------------------------------------------------
 print()
