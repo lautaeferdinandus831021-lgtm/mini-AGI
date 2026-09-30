@@ -1,0 +1,62 @@
+{
+  "commands": [
+    "python3 -m minagi.knowledge show paypal-autovuln-recheck --markdown"
+  ],
+  "cwe": [
+    "CWE-693",
+    "CWE-200"
+  ],
+  "date_closed": "2026-09-30",
+  "date_filed": "",
+  "evidence": [
+    {
+      "note": "the scanner's own captured evidence - content_sample, sensitive_data, present_headers - is the ground truth this re-verification judged",
+      "path": "vulnerability_report.json (operator's Kali box, not in repo)"
+    },
+    {
+      "note": "same evidence rendered; attack_scenarios contradict present_headers",
+      "path": "vulnerability_report.html (operator's Kali box, not in repo)"
+    }
+  ],
+  "id": "paypal-autovuln-recheck",
+  "key_facts": [
+    "Finding 2 (/graphql, High, CWE-200) - FALSE POSITIVE: the content_sample the scanner captured is the PayPal US homepage HTML ('<!DOCTYPE html>... <title>Pay, Send and Save Money with PayPal | PayPal US</title>'), not a GraphQL response - the path SPA-falls-back to the homepage. sensitive_data is an empty {} for the endpoint; no schema, no introspection payload was ever captured. 'Schema introspection' is asserted, never demonstrated.",
+    "Finding 2 (/robots.txt, High bundle) - PUBLIC BY DESIGN: 2.6 KB of standard Disallow directives. robots.txt is meant to be public; its disclosure is not a vulnerability and is universally excluded from bounty programs.",
+    "Finding 2's own evidence contradicts its description: data_classification lists 'Database credentials' and 'Cryptographic keys' while sensitive_data is {} for both endpoints, and the description even renders the template bug 'Exposed data includes: .' (empty). The embedded 'automated exploitation' bash script greps for credentials in files the recon itself showed return 403 (/.env, /.git/config, /phpinfo.php).",
+    "Finding 1 (Missing Headers, Medium, CWE-693) - largely FALSE POSITIVE: the scanner's own present_headers show Content-Security-Policy with frame-ancestors 'self' https://*.paypal.com. CSP frame-ancestors is enforced by all modern browsers and prevents the exact clickjacking PoC the report demonstrates (the <iframe> would be blocked). The 'XSS via missing CSP' attack scenario is internally contradictory - CSP is present, and a strict one.",
+    "Residual truth in finding 1: Referrer-Policy is genuinely absent from the captured headers. That alone is a Low/Informational hardening note (referrer leakage of URLs), not a Medium 'protection mechanism failure'. X-Frame-Options would be redundant defense-in-depth alongside frame-ancestors (relevant only to legacy browsers that ignore CSP).",
+    "'Verified PoCs: 2/2' is a scanner misnomer: verification was 'header present/absent' and 'HTTP 200 + length > 50 bytes', which proves existence, not sensitivity. The 403s on /.env, /.git/config, /phpinfo.php in recon were correctly NOT counted.",
+    "Scanner hygiene problems worth remembering: it generates an 'automated exploitation script' targeting a third party as report boilerplate; its severity scales label a bundled robots.txt 'High (7.5)'; and the overall MEDIUM-HIGH rating rests entirely on the false-positive bundle."
+  ],
+  "lessons": [
+    "A scanner's 'Verified PoC' badge means whatever its code made it mean - here, 'HTTP 200 and >50 bytes', which proves existence, not exposure. Always read the captured content_sample before believing a severity.",
+    "Judge findings against the response BODY the scanner captured, not the template prose around it: the body said homepage HTML and empty sensitive_data; the prose said 'critical files accessible'.",
+    "Check the finding's evidence against its own claims: frame-ancestors in present_headers defeats the report's clickjacking PoC; a present CSP defeats 'XSS via missing CSP'. Internal contradiction is the fastest false-positive signal.",
+    "Never run a scanner that ships generated exploitation scripts against targets outside an authorized program scope - and never verify third-party targets with live requests from this workspace; evidence-only re-verification answers the question safely."
+  ],
+  "program": "none (third-party target, NOT scanned live - evidence-only re-verification)",
+  "references": [
+    "CWE-693 (protection mechanism failure) - claimed, mostly rejected",
+    "CWE-200 (information exposure) - claimed, rejected",
+    "CSP frame-ancestors (browser-enforced embedding control, supersedes XFO on modern browsers)"
+  ],
+  "related": [
+    "crypto-graphql-negative"
+  ],
+  "report_type": "verification",
+  "severity": "none",
+  "status": "resolved",
+  "summary": "The operator's AutoVuln Pro v3.0 scan reported 2 findings (1 High, 1 Medium, risk MEDIUM-HIGH, 'Verified PoCs 2/2'). Re-verification against the evidence captured inside the scanner's own report rejects both: the High finding is a false positive (both 'exposed' endpoints return public-by-design or fall-back content with zero sensitive data), and the Medium finding collapses to a single Low observation (Referrer-Policy absent) because the scanner's own header dump shows a strict CSP carrying frame-ancestors, which defeats its clickjacking and missing-CSP claims. Nothing is reportable to any program. NO requests were sent to the target during this re-verification - every conclusion below is derived from the raw evidence the scanner itself captured, per the repo's verdict-from-raw-body discipline.",
+  "target": "paypal.com (as reported by the operator's AutoVuln Pro v3.0 run, 2026-09-30)",
+  "timeline": [
+    {
+      "date": "2026-09-30",
+      "event": "Operator ran AutoVuln Pro v3.0 against paypal.com (111.5s, 2 findings, risk MEDIUM-HIGH, PoCs marked 2/2 verified)"
+    },
+    {
+      "date": "2026-09-30",
+      "event": "Evidence-only re-verification: both findings rejected from the scanner's own captured evidence; residual = missing Referrer-Policy (Low). No packets sent to the target."
+    }
+  ],
+  "title": "Re-verification of AutoVuln Pro v3.0 scan on paypal.com - both findings fail"
+}
