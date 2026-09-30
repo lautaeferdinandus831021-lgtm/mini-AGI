@@ -26,7 +26,8 @@
     "Finding 1 (Missing Headers, Medium, CWE-693) - largely FALSE POSITIVE: the scanner's own present_headers show Content-Security-Policy with frame-ancestors 'self' https://*.paypal.com. CSP frame-ancestors is enforced by all modern browsers and prevents the exact clickjacking PoC the report demonstrates (the <iframe> would be blocked). The 'XSS via missing CSP' attack scenario is internally contradictory - CSP is present, and a strict one.",
     "Residual truth in finding 1: Referrer-Policy is genuinely absent from the captured headers. That alone is a Low/Informational hardening note (referrer leakage of URLs), not a Medium 'protection mechanism failure'. X-Frame-Options would be redundant defense-in-depth alongside frame-ancestors (relevant only to legacy browsers that ignore CSP).",
     "'Verified PoCs: 2/2' is a scanner misnomer: verification was 'header present/absent' and 'HTTP 200 + length > 50 bytes', which proves existence, not sensitivity. The 403s on /.env, /.git/config, /phpinfo.php in recon were correctly NOT counted.",
-    "Scanner hygiene problems worth remembering: it generates an 'automated exploitation script' targeting a third party as report boilerplate; its severity scales label a bundled robots.txt 'High (7.5)'; and the overall MEDIUM-HIGH rating rests entirely on the false-positive bundle."
+    "Scanner hygiene problems worth remembering: it generates an 'automated exploitation script' targeting a third party as report boilerplate; its severity scales label a bundled robots.txt 'High (7.5)'; and the overall MEDIUM-HIGH rating rests entirely on the false-positive bundle.",
+    "Policy-scope cross-check (2026-09-30, HackerOne paypal program): the residual Referrer-Policy note is out-of-scope by program policy, not merely weak - large programs exclude missing security headers / best-practice hardening without a demonstrated exploit (an industry-wide norm), and PayPal's out-of-scope list is an open-ended 'include, but are not limited to'. Both findings therefore fail twice: technically AND on scope. paypal.com being an ACTIVE H1 asset also means any future testing must follow the program's own rules (asset scope, rate limits, prohibited techniques) - automated fuzzing outside those rules is a compliance risk of its own."
   ],
   "lessons": [
     "A scanner's 'Verified PoC' badge means whatever its code made it mean - here, 'HTTP 200 and >50 bytes', which proves existence, not exposure. Always read the captured content_sample before believing a severity.",
@@ -38,7 +39,8 @@
   "references": [
     "CWE-693 (protection mechanism failure) - claimed, mostly rejected",
     "CWE-200 (information exposure) - claimed, rejected",
-    "CSP frame-ancestors (browser-enforced embedding control, supersedes XFO on modern browsers)"
+    "CSP frame-ancestors (browser-enforced embedding control, supersedes XFO on modern browsers)",
+    "https://hackerone.com/paypal/policy_scopes (JS-rendered; verbatim out-of-scope list confirmed only via search snippets: physical attacks, username enumeration, self-XSS, ...)"
   ],
   "related": [
     "crypto-graphql-negative"
