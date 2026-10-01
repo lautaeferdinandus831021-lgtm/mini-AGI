@@ -19,7 +19,9 @@
 #                          routes, whole-character SSE decoding, the train.py
 #                          growth-line print on both CPU and CUDA, plus
 #                          minagi/stream, minagi/paged, minagi/live,
-#                          minagi/plasticity and minagi/knowledge invariants
+#                          minagi/plasticity, minagi/knowledge and the
+#                          dynamic scopes (skills battery + knowledge
+#                          target scope) invariants
 #   [5] store surface      minagi.store contract (runs only if torch exists)
 #   [6] tree hygiene       git status/diff unchanged by the whole run
 #

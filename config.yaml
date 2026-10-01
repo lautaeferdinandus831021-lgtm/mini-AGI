@@ -159,3 +159,20 @@ plots:
   enabled: true           # redraw the graphs whenever the sample log grows
   last: 100               # millions of characters the recent-progress graph
                           # covers, counted back from wherever reading has got
+
+skills:
+  # THE OUTBOUND SCAN SCOPE IS DYNAMIC. Leave this unset and every battery
+  # registered in minagi/skills.py runs - the eight shipped ones plus any
+  # added at runtime with register_battery(). Set it and this exact scope
+  # replaces the default for the chat replies (serve.py) and the sample log
+  # (train.py --skills); a typo raises ScopeError at startup rather than
+  # quietly scanning less.
+  #
+  #   skills:
+  #     scope:
+  #       - battery: SECRETS_DETECT
+  #       - label: ticket_leak
+  #         regex: 'TICK-[0-9]{4,}'
+  #         skill: TICKETS            # optional battery label in findings
+  scope: []                # [] = everything registered; delete the line
+                           # to inherit that default on every run

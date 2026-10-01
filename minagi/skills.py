@@ -31,6 +31,13 @@ What is ported vs. deliberately not:
 
 `scan()` runs the security battery over a sample and returns one
 machine-readable verdict - the training loop and the web UI both print it.
+The battery list is a DYNAMIC SCOPE, not a constant: register_battery() and
+unregister_battery() change what every caller runs at runtime, and
+scope_from_config() turns the `skills.scope` list in config.yaml into the
+scope the serving and training paths use (absent = every registered
+battery). Anything that does not resolve - an unknown battery name, a
+regex that will not compile - raises ScopeError rather than quietly
+scanning less.
 
 Every function takes the text (or pair) first and keyword params after, and
 never raises on odd input: an evaluation that crashes is an evaluation that
@@ -39,11 +46,15 @@ fails open. CLI:
     python3 -m minagi.skills list
     python3 -m minagi.skills run IS_JSON --input file.txt
     python3 -m minagi.skills scan --input file.txt
+    python3 -m minagi.skills scan --battery SECRETS_DETECT --input file.txt
+    python3 -m minagi.skills scan --pattern 'TICKET=TICK-[0-9]+' --input f.txt
+    python3 -m minagi.skills scope
 """
 
 import json
 import math
 import re
+import sys
 from collections import Counter
 from urllib.parse import urlparse
 
@@ -457,21 +468,228 @@ def _battery(text, patterns):
     return hits
 
 
+# ---------------------------------------------------------------------------
+# the dynamic scan scope
+# ---------------------------------------------------------------------------
+
+class ScopeError(ValueError):
+    """A scan scope that would silently shrink or fail open."""
+
+
+# The shipped battery, frozen at import. register_battery() may extend the
+# live list and unregister_battery() may remove what it added, but the
+# shipped eight are the floor the contract promises - reports, tests and
+# the web UI all assume them, so they are never removable.
+_FACTORY_BATTERY = tuple((n, tuple(p), d) for n, p, d in _SECURITY_BATTERY)
+
+
+def register_battery(name, patterns, description=None):
+    """Add a battery to the LIVE security scope, module-wide, immediately.
+
+    The batteries stay the static shape they always were - a list of
+    (label, regex) pairs - but the SCOPE is derived at call time: what
+    scan() runs by default, what GROUPS['security'] lists and what
+    registry() exposes all read the live list, so a battery registered
+    here is picked up by the training loop and the web UI without touching
+    either.
+
+    `name` must be SCREAMING_SNAKE_CASE (it becomes a skill name),
+    `patterns` a non-empty list of (label, regex) pairs with unique
+    labels, `description` one line for `python3 -m minagi.skills scope`.
+    Raises ScopeError on a bad or duplicate name, a duplicate label or an
+    uncompilable regex - a battery that cannot be trusted to run is not
+    added half-way.
+    """
+    if not isinstance(name, str) or not re.match(r"^[A-Z][A-Z0-9_]*$", name):
+        raise ScopeError(f"battery name must be SCREAMING_SNAKE_CASE "
+                         f"(got {name!r})")
+    if name == "security":
+        raise ScopeError("'security' is the reserved group name")
+    if name.lower() in (n.lower() for n, _, _ in _SECURITY_BATTERY):
+        raise ScopeError(f"battery {name!r} is already registered")
+    if not isinstance(patterns, (list, tuple)) or not patterns:
+        raise ScopeError("patterns must be a non-empty list of "
+                         "(label, regex) pairs")
+    seen, pats = set(), []
+    for item in patterns:
+        if not (isinstance(item, (tuple, list)) and len(item) == 2):
+            raise ScopeError("each pattern is a (label, regex) pair")
+        label, rx = item
+        if not label or not isinstance(label, str):
+            raise ScopeError("a pattern label must be a non-empty string")
+        if label in seen:
+            raise ScopeError(f"duplicate pattern label {label!r}")
+        seen.add(label)
+        try:
+            pats.append((label, re.compile(rx)))
+        except re.error as exc:
+            raise ScopeError(f"bad regex for {label!r}: {exc}") from exc
+    _SECURITY_BATTERY.append((name, pats, description or "runtime battery"))
+    GROUPS["security"].append(name)
+
+
+def unregister_battery(name):
+    """Remove a RUNTIME-registered battery again.
+
+    The shipped batteries are part of the contract - the reports, the
+    tests and the gate all assume them - and refuse to leave. An unknown
+    name raises ScopeError too: removing nothing silently would hide the
+    bug that called for it.
+    """
+    for i, (n, _, _) in enumerate(_SECURITY_BATTERY):
+        if n == name:
+            if any(n == f[0] for f in _FACTORY_BATTERY):
+                raise ScopeError(f"{name!r} is a shipped battery - it is "
+                                 f"part of the contract and is never removed")
+            del _SECURITY_BATTERY[i]
+            GROUPS["security"].remove(name)
+            return
+    raise ScopeError(f"unknown battery {name!r} - registered: "
+                     f"{[n for n, _, _ in _SECURITY_BATTERY]}")
+
+
+def scope_from_config(cfg):
+    """The `skills.scope` list from a loaded config.yaml, ready for scan().
+
+    Each entry is one of
+        NAME                                   a registered battery
+        {"battery": NAME}                      the same, spelled out
+        {"skill": NAME}                        the same, spelled as a skill
+        {"label": L, "regex": R, "skill": S?}  one ad-hoc pattern
+    (so a config scope can mix bare battery names and pattern entries,
+    exactly what scan() takes). Unknown keys, unknown battery/skill names
+    and uncompilable regexes raise ScopeError HERE - at startup, where the
+    operator is looking - instead of quietly shrinking the scan mid-run.
+    An absent or empty scope returns [], which scan() reads as "everything
+    registered".
+    """
+    from minagi.config import get
+    scope = get(cfg or {}, "skills.scope")
+    if scope is None:
+        return []
+    if not isinstance(scope, list):
+        raise ScopeError("skills.scope must be a list of scope entries")
+    known = [n for n, _, _ in _SECURITY_BATTERY]
+    out = []
+    for entry in scope:
+        if isinstance(entry, str):
+            if entry not in known:
+                raise ScopeError(f"skills.scope names unknown battery "
+                                 f"{entry!r} - registered: {known}")
+            out.append(entry)
+            continue
+        if not isinstance(entry, dict):
+            raise ScopeError(f"scope entries must be battery names or "
+                             f"mappings (got {type(entry).__name__})")
+        if "battery" in entry and ("label" in entry or "regex" in entry
+                                   or "pattern" in entry):
+            raise ScopeError("a scope entry is a battery OR a pattern, "
+                             "not both")
+        bad = [k for k in entry
+               if k not in ("battery", "label", "regex", "pattern", "skill")]
+        if bad:
+            raise ScopeError(f"unknown scope key(s) {bad} - expected "
+                             f"battery/skill/label/regex/pattern")
+        if "battery" in entry or ("skill" in entry
+                                  and "label" not in entry
+                                  and "regex" not in entry
+                                  and "pattern" not in entry):
+            name = entry.get("battery") or entry.get("skill")
+            if name not in known:
+                raise ScopeError(f"skills.scope names unknown battery "
+                                 f"{name!r} - registered: {known}")
+            out.append({"battery": name})
+            continue
+        label = entry.get("label")
+        regex = entry.get("regex", entry.get("pattern"))
+        if not label or not regex:
+            raise ScopeError("a pattern scope entry needs 'label' and "
+                             "'regex' (or name a battery)")
+        try:
+            re.compile(regex)
+        except re.error as exc:
+            raise ScopeError(f"skills.scope pattern {label!r}: {exc}") from exc
+        out.append({"label": label, "regex": regex,
+                    "skill": entry.get("skill", "CUSTOM")})
+    return out
+
+
+def scan_scope(text, scope=None):
+    """scan() under the config.yaml scope - the entry point serve.py and
+    train.py call instead of raw scan(), so the configured scope is read
+    at RUNTIME on every reply and every sample, not baked in at import.
+    scope=None means "the configured scope, or everything registered when
+    none is set"; a list replaces it wholesale."""
+    from minagi.config import load
+    if scope is None:
+        scope = scope_from_config(load()) or None
+    return scan(text, batteries=scope)
+
+
 def scan(text, batteries=None):
-    """Run the security battery over a sample.
+    """Run the security battery over a sample, under a dynamic scope.
+
+    The scope (the second argument - the knob that used to be baked in):
+
+      * batteries=None            every REGISTERED battery runs - the eight
+                                  shipped ones plus anything added at
+                                  runtime with register_battery().
+      * batteries=[entries...]    exactly that scope: battery names (or the
+                                  equivalent {"battery": NAME}), and/or
+                                  ad-hoc pattern instructions {"label",
+                                  "regex", "skill"?}. An explicit EMPTY
+                                  list is an empty scope - nothing runs and
+                                  the sample passes, on purpose; pass None
+                                  when you mean "the default".
+
+    An unknown battery name or a pattern that does not compile raises
+    ScopeError, so a typo can never quietly shrink the scan.
 
     Returns {"pass": bool, "findings": [...], "n": int}. A finding is a
     nomination for a human, not a verdict - `guarded` marks matches that sit
     in an obviously reflective/benign sentence. pass is False when there is
     at least one unguarded finding.
     """
-    batteries = batteries or [b[0] for b in _SECURITY_BATTERY]
-    wanted = {name: pats for name, pats, _ in _SECURITY_BATTERY
-              if name in batteries}
+    if batteries is None:
+        batteries = [name for name, _, _ in _SECURITY_BATTERY]
+    if not isinstance(batteries, (list, tuple)):
+        raise ScopeError("batteries must be a list of battery names and/or "
+                         f"pattern instructions (got "
+                         f"{type(batteries).__name__})")
+    registry_pats = {name: pats for name, pats, _ in _SECURITY_BATTERY}
+    wanted = []                       # [(skill_name, [(label, rx), ...])]
+    for item in batteries:
+        if isinstance(item, str):
+            if item not in registry_pats:
+                raise ScopeError(f"unknown battery {item!r} - registered: "
+                                 f"{list(registry_pats)}")
+            wanted.append((item, registry_pats[item]))
+        elif isinstance(item, dict):
+            if "battery" in item:
+                name = item["battery"]
+                if name not in registry_pats:
+                    raise ScopeError(f"unknown battery {name!r} - "
+                                     f"registered: {list(registry_pats)}")
+                wanted.append((name, registry_pats[name]))
+                continue
+            label = item.get("label")
+            regex = item.get("regex", item.get("pattern"))
+            if not label or not regex:
+                raise ScopeError("a pattern scope entry needs 'label' and "
+                                 "'regex' (or pass a battery name)")
+            try:
+                rx = re.compile(regex)
+            except re.error as exc:
+                raise ScopeError(f"bad pattern {label!r}: {exc}") from exc
+            wanted.append((str(item.get("skill") or "CUSTOM"),
+                           [(str(label), rx)]))
+        else:
+            raise ScopeError("a scope entry must be a battery name or a "
+                             "{'label', 'regex'} instruction")
     findings = []
-    for name, pats in wanted.items():
+    for skill, pats in wanted:
         for hit in _battery(text, pats):
-            hit["skill"] = name
+            hit["skill"] = skill
             findings.append(hit)
     unguarded = [f for f in findings if not f["guarded"]]
     return {"pass": not unguarded, "findings": findings, "n": len(findings),
@@ -538,11 +756,12 @@ def run_skill(name, text=None, **params):
         return _fail(f"error: {exc}")
 
 
-def format_report(results, text=""):
-    """Human-readable block, the shape appended under training samples."""
+def format_report(results, text="", batteries=None):
+    """Human-readable block, the shape appended under training samples.
+    `batteries` scopes the security section the way scan() takes it."""
     lines = ["<skills>"]
     if text:
-        r = scan(text)
+        r = scan(text, batteries=batteries)
         if r["n"] == 0:
             lines.append("security: clean")
         else:
@@ -583,6 +802,17 @@ def format_scans(scans, limit=6):
     return "\n".join(lines)
 
 
+def _parse_patterns(specs):
+    """"LABEL=REGEX" flags -> {'label', 'regex'} scope instructions."""
+    out = []
+    for spec in specs:
+        label, sep, regex = spec.partition("=")
+        if not sep or not label or not regex:
+            raise ScopeError(f"pattern must be LABEL=REGEX (got {spec!r})")
+        out.append({"label": label, "regex": regex})
+    return out
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -600,9 +830,19 @@ def _main():
     p_run.add_argument("--text", default=None)
     p_run.add_argument("--input", default=None, help="file to read")
     p_run.add_argument("--params", default="{}", help="JSON kwargs")
-    p_scan = sub.add_parser("scan", help="run the full security battery")
+    p_scan = sub.add_parser("scan", help="run the security battery")
     p_scan.add_argument("--text", default=None)
     p_scan.add_argument("--input", default=None)
+    p_scan.add_argument("--battery", action="append", metavar="NAME",
+                        help="limit the scan to this battery (repeatable)")
+    p_scan.add_argument("--pattern", action="append", metavar="LABEL=REGEX",
+                        help="add one ad-hoc pattern to this scan "
+                             "(repeatable)")
+    p_scan.add_argument("--add-battery", metavar="NAME",
+                        help="register this run's --pattern flags as a "
+                             "battery named NAME instead of ad-hoc CUSTOM")
+    sub.add_parser("scope", help="show the current scan scope (registered "
+                                 "batteries + skills.scope from config.yaml)")
     args = ap.parse_args()
 
     if args.cmd == "list":
@@ -611,8 +851,8 @@ def _main():
             for n in names:
                 print(f"  {n}")
         return
-    text = args.text
-    if text is None and args.input:
+    text = getattr(args, "text", None)
+    if text is None and getattr(args, "input", None):
         with open(args.input, "r", errors="replace") as fh:
             text = fh.read()
     if args.cmd == "run":
@@ -620,11 +860,48 @@ def _main():
         v = run_skill(args.skill, text or "", **params)
         print(format_report([(args.skill, v)]))
         return
+    if args.cmd == "scope":
+        from minagi.config import load as _cfg_load
+        print("registered batteries:")
+        for n, _, d in _SECURITY_BATTERY:
+            print(f"  {n:<26} {d}")
+        try:
+            cfg_scope = scope_from_config(_cfg_load())
+        except ScopeError as exc:
+            print(f"[scope] config.yaml: {exc}", file=sys.stderr)
+            return 2
+        if cfg_scope:
+            print("skills.scope (config.yaml) replaces the default for "
+                  "serve/train:")
+            for e in cfg_scope:
+                print(f"  {e}")
+        else:
+            print("skills.scope: not set - every registered battery runs")
+        return 0
+
     if args.cmd == "scan":
-        r = scan(text or "")
-        print(format_report([], text=text or ""))
-        return
+        from minagi.config import load as _cfg_load
+        try:
+            pats = _parse_patterns(args.pattern or [])
+            if args.add_battery:
+                if not pats:
+                    print("--add-battery needs at least one --pattern",
+                          file=sys.stderr)
+                    return 2
+                register_battery(args.add_battery, pats)
+                args.battery = (args.battery or []) + [args.add_battery]
+                pats = []
+            if args.battery or pats:
+                scope = list(args.battery or []) + pats
+            else:
+                scope = scope_from_config(_cfg_load()) or None
+            scan(text or "", batteries=scope)
+            print(format_report([], text=text or "", batteries=scope))
+        except ScopeError as exc:
+            print(f"[scope] {exc}", file=sys.stderr)
+            return 2
+        return 0
 
 
 if __name__ == "__main__":
-    _main()
+    sys.exit(_main())

@@ -184,6 +184,15 @@ obviously reflective sentences ("never share your api key") as nominations,
 not verdicts. All skills are fail-closed: an eval that throws returns
 `{"result": false, "reason": "error: …"}`.
 
+**The scope is dynamic, not a constant.** `scan()` reads its battery list
+per call: `register_battery()` / `unregister_battery()` change what every
+caller runs at runtime (shipped batteries can never be removed), and
+`scope_from_config()` turns the `skills.scope` list in `config.yaml` into
+the scope `scan_scope()` - the entry point both serve.py and train.py call -
+resolves at RUNTIME on every reply and every sample log. An absent scope
+means "everything registered"; a typo in the config raises `ScopeError` at
+startup instead of quietly scanning less.
+
 **Files:** `minagi/skills.py`, `train.py`, `serve.py`.
 
 ---
@@ -247,6 +256,36 @@ the record is the unit of knowledge: title/program/target/status/CWE/dates,
 a timeline of dated facts, key_facts that carry the conclusions, evidence
 pointers (gitignored raw proof stays where it is), regeneration commands,
 and lessons - the part worth keeping forever.
+
+**The testing scope is dynamic too.** Which targets/programs the workspace
+is watching lives in `knowledge/scope.json` (entries of {target, program,
+added, status, note}), not in any hardcoded list: `scope_targets()` answers
+"what are we watching", `save()` grows the scope automatically the first
+time a record names a new target, and `scope-add` / `scope-status` /
+`scope-remove` edit it on purpose. `python3 -m minagi.knowledge stats`
+reports it next to the record counts.
+
+```bash
+python3 -m minagi.knowledge scope
+python3 -m minagi.knowledge scope-add TARGET [--program P] [--note N]
+python3 -m minagi.knowledge scope-status TARGET STATUS
+python3 -m minagi.knowledge scope-remove TARGET
+```
+
+**The testing scope is dynamic too.** Which targets/programs the workspace
+is watching lives in `knowledge/scope.json` (entries of {target, program,
+added, status, note}), not in any hardcoded list: `scope_targets()` answers
+"what are we watching", `save()` grows the scope automatically the first
+time a record names a new target, and `scope-add` / `scope-status` /
+`scope-remove` edit it on purpose. `python3 -m minagi.knowledge stats`
+reports it next to the record counts.
+
+```bash
+python3 -m minagi.knowledge scope
+python3 -m minagi.knowledge scope-add TARGET [--program P] [--note N]
+python3 -m minagi.knowledge scope-status TARGET STATUS
+python3 -m minagi.knowledge scope-remove TARGET
+```
 ```
 
 Seeded from the real tracks: `curl-referer-uaf` (H1 #3971462,

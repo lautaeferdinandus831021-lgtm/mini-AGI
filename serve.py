@@ -43,7 +43,10 @@ from minagi.identity import APP_NAME as _APP_NAME
 from minagi.identity import banner as _app_banner
 from minagi.skills import GROUPS as _SKILL_GROUPS
 from minagi.skills import run_skill as _skill_run
-from minagi.skills import scan as _skill_scan
+# scan_scope, not raw scan: the security battery is a DYNAMIC SCOPE read
+# from config.yaml (skills.scope) on every call - batteries registered at
+# runtime appear in every reply's scan without touching serve.py.
+from minagi.skills import scan_scope as _skill_scan
 
 app = Flask(__name__)
 

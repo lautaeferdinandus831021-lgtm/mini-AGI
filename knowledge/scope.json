@@ -1,0 +1,9 @@
+[
+  {
+    "target": "github.com/NVIDIA/skills",
+    "program": "internal (WhiteHat_mini-AGI skill supply chain)",
+    "added": "2026-09-28",
+    "status": "monitor",
+    "note": "seeded dynamic scope; entry shape mirrors record targets - scope-add/scope-remove or record saves grow it from here"
+  }
+]
