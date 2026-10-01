@@ -52,7 +52,9 @@ DRY_RUN=0
 USE_API=0
 OUT=""
 FILE=""
-API_BASE="https://api.hackerone.com/v1/hackers"
+# test-only override: point the post path at a local mock to rehearse the
+# API exchange end-to-end. Production default is the real Hacker API.
+API_BASE="${H1_API_BASE:-https://api.hackerone.com/v1/hackers}"
 H1_USER_VAR="H1_API_USERNAME"      # name only - values are never read here
 H1_TOKEN_VAR="H1_API_TOKEN"
 
