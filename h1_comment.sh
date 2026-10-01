@@ -75,7 +75,7 @@ verify_facts_python() {
 import json, os, sys
 
 draft = open(os.environ["H1_DRAFT"]).read()
-if "Thanks — we fully agree" not in draft:
+if "Following the informative, no-CVE disposition" not in draft:
     sys.exit("draft body marker missing")
 if "---" not in draft:
     sys.exit("draft separator '---' missing")
@@ -91,18 +91,18 @@ required = [
     "ff300ac4aa", "2026-06-01", "d0247689", "2026-08-27",
     "8.22.0 (tag curl-8_22_0 on 2026-09-01",
     "8.21.0 (2026-06-23) is the ONLY tagged release",
-    "Termux/proot", "ASLR", "informative, no CVE",
+    "Termux/proot", "ASLR", "informative, no CVE", "cloud Linux terminal",
 ]
 missing = [c for c in required if c not in facts]
 if missing:
     sys.exit("claims missing from record: " + ", ".join(missing))
-print("[h1] facts OK: 9/9 claims trace to the record; disposition informative/no-CVE")
+print("[h1] facts OK: 10/10 claims trace to the record; disposition informative/no-CVE")
 PY
 }
 
 verify_facts_grep() {
     # bash-only checks: same claims, string-match over the JSON + draft
-    grep -qF 'Thanks — we fully agree' "$DRAFT" || die "draft body marker missing"
+    grep -qF 'Following the informative, no-CVE disposition' "$DRAFT" || die "draft body marker missing"
     grep -qF '"id": "curl-referer-uaf"' "$RECORD" || die "wrong record id"
     grep -qF '"status": "n/a-informational"' "$RECORD" || die "record status mismatch"
     grep -qF '"date_closed": "2026-10-01"' "$RECORD" || die "record date_closed mismatch"
@@ -110,7 +110,8 @@ verify_facts_grep() {
     for claim in 'ff300ac4aa' 'd0247689' \
                  '8.22.0 (tag curl-8_22_0 on 2026-09-01' \
                  '8.21.0 (2026-06-23) is the ONLY tagged release' \
-                 'Termux/proot' 'ASLR' 'informative, no CVE'; do
+                 'Termux/proot' 'ASLR' 'informative, no CVE' \
+                 'cloud Linux terminal'; do
         grep -qF "$claim" "$RECORD" || die "claim missing from record: $claim"
     done
     echo "[h1] facts OK: claims verified by grep (python3 not available)"
