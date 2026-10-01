@@ -8,22 +8,30 @@
   "severity": "none",
   "cwe": ["CWE-416", "CWE-908", "CWE-200"],
   "date_filed": "2026-09-15",
-  "date_closed": "",
-  "summary": "Original submission H1 #3971462 was closed as Informative. The memory error itself is real, deterministic and independently reproduced (2/2 on the vulnerable commit); the closure rests on the trigger being an application-side pointer round-trip AND on the bug already being fixed upstream before it was reported. The surviving deliverable is the verified regression window, actionable for distro maintainers and packagers. No part of the follow-up asks for a reopen.",
+  "date_closed": "2026-10-01",
+  "summary": "Original submission H1 #3971462 was closed as Informative. The memory error itself is real, deterministic and independently reproduced (2/2 on the vulnerable commit); the closure rests on the trigger being an application-side pointer round-trip AND on the bug already being fixed upstream before it was reported. The surviving deliverable is the verified regression window, actionable for distro maintainers and packagers. Triager's final disposition (2026-10-01) confirms the outcome and adds: informative, no CVE (weak threat model - the application's own code triggers the bug, a remote party can at most receive a few leaked bytes; a CVE 'about the past' has declining value); had it been found in a current release it would likely have been a CVE, not necessarily HIGH. No part of the follow-up asks for a reopen.",
   "key_facts": [
     "Free-then-read ordering introduced 2026-06-01 by commit ff300ac4aa; fixed 2026-08-27 by d0247689 (CURLINFO_REFERER, test 2397, closes #22709) - 19 days before the 2026-09-15 submission.",
     "PoC reproduces deterministically on ff300ac4aa (2/2) and is clean on fixed HEAD (2/2); tcache demo shows stale bytes reused as strlen=5 (ASLR-varied, pattern-consistent).",
     "Regression window for packagers: ff300ac4aa (2026-06-01) through d0247689 (2026-08-27).",
     "A stale incremental build produced a round-1 false negative (PoC looked fixed on the vulnerable commit); fresh-build discipline restored 2/2 reproducibility on the 2026-09-28 retest.",
-    "REPORT_V2.md documents what remains verifiably true without requesting a reopen."
+    "REPORT_V2.md documents what remains verifiably true without requesting a reopen.",
+    "VERIFIED 2026-10-01: the fix first shipped in curl 8.22.0 (tag curl-8_22_0 on 2026-09-01, announced 2026-09-02) - triager's claim confirmed against GitHub releases and daniel.haxx.se.",
+    "VERIFIED 2026-10-01: 8.21.0 (2026-06-23) is the ONLY tagged release shipped inside the vulnerable window - 8.20.0 (2026-04-28) predates the introduction, so the tagged-release install base exposed to this bug is exactly one release for about ten weeks, which substantiates the triager's declining-value rationale against a retroactive CVE.",
+    "Triager's final disposition (2026-10-01): release as informative, no CVE; reasoning - the attacker does not trigger the bug (the app's own code does), so the most a remote party can do is be the recipient of a few leaked bytes; had it been found in a latest current release it would likely have been raised as a CVE, but not a HIGH.",
+    "Triager's evidence criticisms assessed against our artifacts: (a) 'ASan failure caused by your Termux/proot env' - CORRECT and already documented in UBUNTU.md (ASan cannot map its shadow memory inside proot; run_on_ubuntu.sh preflights and refuses proot/Termux); all conclusive ASan evidence came from the native Ubuntu sandbox. (b) 'multiple overlong wall of text' - fair presentation critique, adopted as a lessons item for future reports. (c) 'three runs with different leaked bytes' - the three runs (3b c4 71 5a 05 / 1f af 15 61 05 / ce 83 ae 58 05) are exactly the reproducibility evidence: the mechanism is deterministic, the values are ASLR-varied by construction; this does not weaken the claim.",
+    "The record's position and the triager's final position now fully agree: bug real, fixed in 8.22.0, informative without CVE, regression window stands as the deliverable."
   ],
   "timeline": [
     {"date": "2026-01-01", "event": "#3774279 - referer dangling-read after setopt replaces/clears it (prior art)"},
     {"date": "2026-06-01", "event": "ff300ac4aa 'setopt: defref the old referer when setting a new' introduces the free-then-read ordering"},
+    {"date": "2026-06-23", "event": "curl 8.21.0 released - the only tagged release carrying the vulnerable window"},
     {"date": "2026-08-27", "event": "d0247689 'setopt: allow setting a referer from CURLINFO_REFERER' fixes it"},
+    {"date": "2026-09-01", "event": "curl 8.22.0 tagged - first release shipping the fix"},
     {"date": "2026-09-15", "event": "#3971462 filed inside the vulnerable window; closed as Informative"},
     {"date": "2026-09-26", "event": "Independent verification: PoC reproduces on ff300ac4aa, fixed HEAD clean; REPORT_V2 published"},
-    {"date": "2026-09-28", "event": "Retest rounds 1-2: vuln 2/2, fixed 2/2; round-1 stale-build false negative caught; tcache retest recorded"}
+    {"date": "2026-09-28", "event": "Retest rounds 1-2: vuln 2/2, fixed 2/2; round-1 stale-build false negative caught; tcache retest recorded"},
+    {"date": "2026-10-01", "event": "Triager's final message: informative, no CVE (weak threat model, app-side trigger, declining value of a CVE about the past); 8.22.0 fix claim verified; evidence criticisms (proot ASan, wall of text, three-run bytes) assessed and reconciled with our artifacts - record closed"}
   ],
   "evidence": [
     {"path": "curl_referer_uaf/REPORT.md", "note": "original submission write-up"},
@@ -31,7 +39,8 @@
     {"path": "curl_referer_uaf/evidence/poc_vuln_commit_output.txt", "note": "PoC output on ff300ac4aa"},
     {"path": "curl_referer_uaf/evidence/poc_fixed_head_output.txt", "note": "clean output on fixed HEAD"},
     {"path": "curl_referer_uaf/evidence/tcache_demo_output.txt", "note": "stale heap bytes observation"},
-    {"path": "curl_referer_uaf/evidence/retest_20260928/", "note": "2x2 retest rounds + tcache ASAN retest"}
+    {"path": "curl_referer_uaf/evidence/retest_20260928/", "note": "2x2 retest rounds + tcache ASAN retest"},
+    {"path": "curl_referer_uaf/UBUNTU.md", "note": "proot/Termux ASan limitation documented - the basis for conceding the triager's env attribution"}
   ],
   "commands": [
     "bash run_on_ubuntu.sh  # from curl_referer_uaf/, on a native box (needs a fresh build of both commits)"
@@ -39,13 +48,17 @@
   "lessons": [
     "Always verify against a FRESH build: a stale incremental build made the PoC look fixed and nearly shipped a false negative.",
     "A closed-as-Informative finding still yields a deliverable: the verified regression window is directly actionable for distro maintainers even when the upstream tracker will not act.",
-    "Accept triage outcomes with evidence instead of arguing: document what remains true, never ask for a reopen."
+    "Accept triage outcomes with evidence instead of arguing: document what remains true, never ask for a reopen.",
+    "Pre-empt the two triager objections before they are made: state the environment ASan was run in (and its limitations), and show N runs of the disclosure demo precisely to demonstrate value variance under ASLR is expected - three different byte strings IS the determinism proof.",
+    "Keep bounty follow-ups short once the outcome is settled: an overlong report invites 'wall of text' pushback even when every section is load-bearing; move detail to the knowledge record, not the tracker comment."
   ],
   "references": [
     "HackerOne #3971462",
     "HackerOne #3774279",
     "curl commit ff300ac4aa (introducing)",
-    "curl commit d0247689 / PR #22709 (fixing)"
+    "curl commit d0247689 / PR #22709 (fixing)",
+    "curl 8.22.0 (2026-09-01, tag curl-8_22_0) - first release with the fix",
+    "daniel.haxx.se 'curl 8.22.0' (2026-09-02)"
   ],
   "related": []
 }
