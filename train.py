@@ -28,8 +28,11 @@ import time
 import argparse
 from dataclasses import asdict
 
+# scan_scope, not raw scan: the security battery is a DYNAMIC SCOPE read
+# from config.yaml (skills.scope) on every sample log - batteries registered
+# at runtime show up in the <skills> block without touching train.py.
 from minagi.skills import format_scans as _skills_block
-from minagi.skills import scan as _skills_scan
+from minagi.skills import scan_scope as _skills_scan
 from minagi.identity import banner as _app_banner
 
 # BEFORE torch, because the allocator reads this once at CUDA init and ignores

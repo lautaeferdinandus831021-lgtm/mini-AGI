@@ -79,6 +79,25 @@ What is covered, and which change each test pins down:
                                 to_markdown() renders the triager-readable
                                 report back out. Pure stdlib, always runs.
 
+  9. dynamic scopes             the two scopes are runtime data, not baked
+                                in: the security battery (minagi/skills.py)
+                                accepts battery names AND ad-hoc pattern
+                                instructions in one scan, register_battery
+                                extends what every caller runs (registry
+                                grows, findings carry the new battery),
+                                unregister removes run-time batteries but
+                                never a shipped one, scope_from_config
+                                validates the config.yaml scope eagerly and
+                                scope_entries scope scan(...) is the exact
+                                train.py/serve.py call; the knowledge store
+                                (minagi/knowledge.py) keeps a dynamic target
+                                scope in scope.json - validate/atomic write,
+                                add/status/remove via the API and the CLI,
+                                save() growing the scope from new record
+                                targets, stats() carrying it, and a corrupt
+                                file degrading to an empty scope. Pure
+                                stdlib, always runs.
+
 Exit code 0 iff no check failed. Sections that cannot run in this environment
 print SKIP lines and count as neither pass nor failure.
 """
@@ -660,10 +679,10 @@ BASE = {
 
 check(kn.validate(dict(BASE)) is not None,
       "a complete record validates")
-for field, bad in [("status", "closed"), ("report_type", "other"),
-                   ("date_filed", "Sept 1"), ("id", "Bad Slug")]:
+for field, bval in [("status", "closed"), ("report_type", "other"),
+                    ("date_filed", "Sept 1"), ("id", "Bad Slug")]:
     r = dict(BASE)
-    r[field] = bad
+    r[field] = bval
     try:
         kn.validate(r)
         check(False, f"bad {field} rejected")
@@ -714,6 +733,228 @@ check("# A demo report" in md and "CWE-416" in md and "## Timeline" in md,
 kn.save(dict(BASE, id="demo-a", title="replaced on purpose"), overwrite=True)
 check(kn.load("demo-a")["title"] == "replaced on purpose",
       "overwrite=True replaces an existing record on purpose")
+
+# ---------------------------------------------------------------------------
+print("== 9. dynamic scopes (skills battery + knowledge target scope) ==")
+from minagi.skills import ScopeError, register_battery, registry, run_skill
+from minagi.skills import scan as _raw_scan
+from minagi.skills import scope_from_config, unregister_battery
+
+# one scan accepts battery names AND ad-hoc pattern instructions, mixed;
+# an explicit scope REPLACES the default (the secret here goes unscanned)
+r = _raw_scan("password: hunter22 - do not log TICK-42",
+              batteries=["PII_DETECT",
+                         {"label": "ticket", "regex": r"TICK-\d+",
+                          "skill": "TICKETS"}])
+check(r["n"] == 1 and r["findings"][0]["skill"] == "TICKETS",
+      "one scan mixes battery names and pattern instructions", f"got {r}")
+check(r["pass"] is True,
+      "an explicit scope REPLACES the default (SECRETS did not run)", f"{r}")
+try:
+    _raw_scan("x", batteries=["NO_SUCH_BATTERY"])
+    check(False, "an unknown battery raises ScopeError")
+except ScopeError:
+    check(True, "an unknown battery raises ScopeError")
+try:
+    _raw_scan("x", batteries=[{"label": "bad", "regex": "(["}])
+    check(False, "an uncompilable scope pattern raises ScopeError")
+except ScopeError:
+    check(True, "an uncompilable scope pattern raises ScopeError")
+check(_raw_scan("anything at all", batteries=[])["pass"] is True,
+      "an explicit empty scope runs nothing and passes")
+
+# register/unregister: the scope every caller sees is runtime data
+n0 = len(registry())
+register_battery("TICKETS_TEST", [("ticket", re.compile(r"TICK-\d+"))],
+                 "internal ticket ids")
+check(len(registry()) == n0 + 1 and "TICKETS_TEST" in registry(),
+      "register_battery extends the skill registry immediately")
+check(run_skill("TICKETS_TEST", "ref TICK-99")["result"] is False,
+      "the new battery runs through the uniform run_skill entry point")
+r = _raw_scan("ref TICK-99")
+check(any(f["skill"] == "TICKETS_TEST" for f in r["findings"]),
+      "a registered battery joins the default scan without opt-in")
+try:
+    register_battery("TICKETS_TEST", [("dup", r"x")])
+    check(False, "a duplicate battery name is rejected")
+except ScopeError:
+    check(True, "a duplicate battery name is rejected")
+try:
+    register_battery("BAD NAME", [("a", r"x")])
+    check(False, "a non-SCREAMING_SNAKE name is rejected")
+except ScopeError:
+    check(True, "a non-SCREAMING_SNAKE name is rejected")
+try:
+    register_battery("EMPTY_PATS", [])
+    check(False, "an empty pattern list is rejected")
+except ScopeError:
+    check(True, "an empty pattern list is rejected")
+try:
+    register_battery("BAD_RX", [("a", "([")])
+    check(False, "an uncompilable registered pattern is rejected")
+except ScopeError:
+    check(True, "an uncompilable registered pattern is rejected")
+try:
+    unregister_battery("PII_DETECT")
+    check(False, "a shipped battery refuses to leave")
+except ScopeError:
+    check(True, "a shipped battery refuses to leave")
+unregister_battery("TICKETS_TEST")
+check(len(registry()) == n0 and "TICKETS_TEST" not in registry(),
+      "unregister_battery removes a runtime battery again")
+try:
+    unregister_battery("TICKETS_TEST")
+    check(False, "removing an unknown battery raises ScopeError")
+except ScopeError:
+    check(True, "removing an unknown battery raises ScopeError")
+
+# scope_from_config validates the config.yaml scope EAGERLY
+from minagi.skills import scope_from_config
+check(scope_from_config({}) == [], "no skills.scope key -> empty (default)")
+check(scope_from_config({"skills": {}}) == [], "empty skills block -> default")
+check(scope_from_config({"skills": {"scope": ["SECRETS_DETECT"]}})
+      == ["SECRETS_DETECT"],
+      "a bare string scope entry passes through as a battery name")
+cases = [
+    ({"skills": {"scope": ["NOPE"]}}, "unknown battery"),
+    ({"skills": {"scope": ["nope-"]}}, "unknown battery (case-sensitive)"),
+    ({"skills": {"scope": [{"label": "a"}]}}, "pattern without regex"),
+    ({"skills": {"scope": [{"label": "a", "regex": "(["}]}},
+     "uncompilable regex"),
+    ({"skills": {"scope": [{"battery": "PII_DETECT", "regex": "x"}]}},
+     "battery and pattern mixed"),
+    ({"skills": {"scope": [{"wat": 1}]}}, "unknown key"),
+    ({"skills": {"scope": "all"}}, "non-list scope"),
+]
+for cfg, why in cases:
+    try:
+        scope_from_config(cfg)
+        check(False, f"bad scope rejected: {why}")
+    except ScopeError:
+        check(True, f"bad scope rejected: {why}")
+
+# scan_scope is the exact call train.py and serve.py make; the scope is
+# resolved from config AT CALL TIME, so a battery registered after the
+# import shows up here without touching either caller.
+from minagi.skills import scan_scope
+register_battery("TICKETS_SCOPE", [("ticket", re.compile(r"TICK-\d+"))])
+cfg = {"skills": {"scope": [{"battery": "TICKETS_SCOPE"},
+                           {"label": "extra", "regex": "ZZZ-[0-9]+",
+                            "skill": "EXTRA"}]}}
+r = scan_scope("ref TICK-99", scope=scope_from_config(cfg))
+check(r["n"] == 1 and r["findings"][0]["skill"] == "TICKETS_SCOPE",
+      "scan_scope runs the configured scope (the serve/train path)", f"{r}")
+r = scan_scope("token ZZZ-123 issued", scope=scope_from_config(cfg))
+check(r["n"] == 1 and r["findings"][0]["skill"] == "EXTRA",
+      "ad-hoc config patterns label their own battery")
+r = scan_scope("nothing matches here")
+check(r["pass"] is True,
+      "scan_scope with no explicit scope reads the repo config (default)")
+unregister_battery("TICKETS_SCOPE")
+try:
+    scope_from_config(cfg)
+    check(False, "scope_from_config re-validates against the live registry")
+except ScopeError:
+    check(True, "scope_from_config re-validates against the live registry")
+
+# ---- the knowledge store's dynamic TARGET scope ---------------------------
+import tempfile as _td2
+import importlib as _il2
+
+_sdir = os.path.join(_td2.mkdtemp(prefix="scope-"), "store")
+os.environ["KNOWLEDGE_DIR"] = _sdir
+import minagi.knowledge as kn2
+_il2.reload(kn2)
+
+check(kn2.load_scope() == [] and kn2.scope_targets() == [],
+      "a fresh store has an empty dynamic scope, not a hardcoded one")
+kn2.scope_add("alpha.test", program="prog A", note="first target")
+kn2.scope_add("beta.test", program="prog B")
+try:
+    kn2.scope_add("alpha.test")
+    check(False, "a duplicate scope target is rejected")
+except kn2.ScopeError:
+    check(True, "a duplicate scope target is rejected")
+try:
+    kn2.scope_remove("nowhere.test")
+    check(False, "removing an unknown scope target is rejected")
+except kn2.ScopeError:
+    check(True, "removing an unknown scope target is rejected")
+kn2.scope_status("beta.test", "monitor")
+check(kn2.scope_targets() == ["alpha.test", "beta.test"],
+      "the scope lists what was added, oldest first")
+check(kn2.load_scope()[1]["status"] == "monitor"
+      and kn2.load_scope()[0]["note"] == "first target",
+      "scope entries carry status and note")
+check(not os.path.exists(kn2.scope_path() + ".tmp"),
+      "the scope write is atomic (no tmp file left behind)")
+for entry, why in [
+        ({"target": "x"}, "missing required fields"),
+        ({"target": "x", "program": "p", "added": "Sept 1",
+          "status": "active"}, "bad date"),
+        ({"target": "x", "program": "p", "added": "2026-10-01",
+          "status": "maybe"}, "bad status"),
+        ({"target": "  ", "program": "p", "added": "2026-10-01",
+          "status": "active"}, "empty target"),]:
+    try:
+        kn2.validate_scope_entry(entry)
+        check(False, f"bad scope entry rejected: {why}")
+    except kn2.ScopeError:
+        check(True, f"bad scope entry rejected: {why}")
+
+# save() GROWS the scope from new record targets - dynamically, both ways
+SCOPE_BASE = {
+    "id": "scope-demo", "title": "T", "program": "prog C",
+    "target": "gamma.test", "report_type": "internal", "status": "draft",
+    "severity": "none", "summary": "s", "cwe": [],
+    "date_filed": "2026-10-01", "date_closed": "", "timeline": [],
+    "key_facts": [], "evidence": [], "commands": [], "lessons": [],
+    "references": [], "related": [],
+}
+kn2.save(dict(SCOPE_BASE))
+check("gamma.test" in kn2.scope_targets(),
+      "saving a record for a new target grows the scope")
+kn2.save(dict(SCOPE_BASE, id="scope-demo-2"), overwrite=False)
+check(kn2.scope_targets().count("gamma.test") == 1,
+      "a second record for the same target does not duplicate it")
+check(kn2.stats()["scope"] == kn2.scope_targets(),
+      "stats() carries the dynamic scope")
+kn2.scope_remove("gamma.test")
+check("gamma.test" not in kn2.scope_targets(),
+      "scope_remove drops a target the CLI way too")
+
+# a corrupt scope file degrades to empty - never fatal to the store
+with open(kn2.scope_path(), "w") as f:
+    f.write("{not json")
+check(kn2.load_scope() == [] and kn2.scope_targets() == [],
+      "a corrupt scope file reads as an empty scope")
+check(kn2.stats()["records"] >= 2,
+      "the store keeps answering with a broken scope file present")
+
+# CLI surface: scope-add / scope / scope-status / scope-remove
+import subprocess as _sp2
+
+def _cli(*args):
+    env = dict(os.environ, KNOWLEDGE_DIR=_sdir)
+    return _sp2.run([sys.executable, "-m", "minagi.knowledge", *args],
+                    capture_output=True, text=True, env=env, cwd=ROOT)
+
+p = _cli("scope-add", "cli.test", "--program", "prog D")
+check(p.returncode == 0 and "cli.test" in kn2.scope_targets(),
+      "CLI scope-add lands in the store", p.stderr)
+p = _cli("scope-status", "cli.test", "retired")
+check(p.returncode == 0
+      and [e for e in kn2.load_scope()
+           if e["target"] == "cli.test"][0]["status"] == "retired",
+      "CLI scope-status flips one entry", p.stderr)
+p = _cli("scope")
+check(p.returncode == 0 and "cli.test" in p.stdout,
+      "CLI scope prints the active scope", p.stderr)
+p = _cli("scope-remove", "cli.test")
+check(p.returncode == 0 and "cli.test" not in kn2.scope_targets(),
+      "CLI scope-remove drops the target", p.stderr)
+p = _cli("scope-remove", "cli.test")
+check(p.returncode == 2, "CLI scope-remove of a missing target fails", p.stderr)
 
 # ---------------------------------------------------------------------------
 print()

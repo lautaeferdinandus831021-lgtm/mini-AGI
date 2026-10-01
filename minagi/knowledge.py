@@ -38,7 +38,22 @@ Rules the store enforces:
     overwrite=True to replace an existing record on purpose.
 
 Storage is one JSON file per record under knowledge/ (gitignored evidence
-stays where it is; the record POINTS at it). CLI:
+stays where it is; the record POINTS at it).
+
+The testing scope - which targets / programs this workspace is working - is
+DYNAMIC, not a list hardcoded anywhere in the code: it lives in
+knowledge/scope.json, grows when a record names a target the scope has
+never seen, and is editable on purpose (scope-add / scope-remove). The code
+only defines the SHAPE of a scope entry:
+
+    {"target": "paypal.com", "program": "HackerOne (paypal)",
+     "added": "2026-09-30", "note": "why this is in scope",
+     "status": "active"}
+
+`scope_targets()` answers "what are we watching" - the union of the declared
+scope, sorted, oldest first. Editing the file (or using the CLI) changes
+what every future list/search/stats command reports as the scope; nothing
+is baked in at import time. CLI:
 
     python3 -m minagi.knowledge list [PATTERN] [--status S] [--target T]
     python3 -m minagi.knowledge show ID [--markdown]
@@ -46,6 +61,9 @@ stays where it is; the record POINTS at it). CLI:
     python3 -m minagi.knowledge add FILE.json [--overwrite]
     python3 -m minagi.knowledge stats
     python3 -m minagi.knowledge timeline [--status S]
+    python3 -m minagi.knowledge scope            # the active scope
+    python3 -m minagi.knowledge scope-add TARGET [--program P] [--note N]
+    python3 -m minagi.knowledge scope-remove TARGET
 """
 
 import json
@@ -117,22 +135,6 @@ def _path(rid):
     return os.path.join(KNOWLEDGE_DIR, rid + ".json")
 
 
-def save(rec, overwrite=False):
-    """Validate and atomically write one record. Returns the record."""
-    validate(rec)
-    path = _path(rec["id"])
-    if os.path.exists(path) and not overwrite:
-        raise RecordError(f"{rec['id']} already exists; pass overwrite=True "
-                          f"to replace it on purpose")
-    os.makedirs(KNOWLEDGE_DIR, exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(rec, f, indent=2, sort_keys=True)
-        f.write("\n")
-    os.replace(tmp, path)
-    return rec
-
-
 def load(rid):
     """One record by id. FileNotFoundError when the id is unknown."""
     with open(_path(rid)) as f:
@@ -202,10 +204,194 @@ def stats():
     for r in records:
         by_status[r["status"]] = by_status.get(r["status"], 0) + 1
     return {"records": len(records), "by_status": by_status,
-            "targets": sorted({r["target"] for r in records})}
+            "targets": sorted({r["target"] for r in records}),
+            "scope": scope_targets()}
 
 
-# ------------------------------------------------------------------ rendering
+# ------------------------------------------------------------- dynamic scope
+# The scope lives in the store, not in the code: one JSON file of entries
+# {target, program, added, note, status}. Growing it when a record names a
+# new target, or editing it with the CLI, changes what "scope" means from
+# then on - nothing is a hardcoded list.
+
+class ScopeError(ValueError):
+    """A scope entry that would not round-trip or would not be answerable."""
+
+
+_SCOPE_REQUIRED = ("target", "program", "added", "status")
+_SCOPE_STATUSES = ("active", "monitor", "retired", "out-of-scope")
+
+
+def scope_path():
+    """Where the scope file lives: inside the store, so one KNOWLEDGE_DIR
+    carries its records AND its scope."""
+    return os.path.join(KNOWLEDGE_DIR, "scope.json")
+
+
+def load_scope():
+    """The declared scope as a list of entries, oldest first.
+
+    Reads the file on EVERY call - the scope is meant to be edited while
+    the app runs. A missing file is an empty scope, not an error; a
+    malformed one is skipped wholesale and reported as empty, never fatal
+    to the store, and an entry that fails validation is dropped rather
+    than allowed to break every query that lists the scope.
+    """
+    try:
+        with open(scope_path()) as f:
+            entries = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(entries, list):
+        return []
+    out = []
+    for e in entries:
+        try:
+            out.append(validate_scope_entry(e))
+        except ScopeError:
+            continue
+    out.sort(key=lambda e: (e["added"] or "9999-99-99", e["target"]))
+    return out
+
+
+def validate_scope_entry(entry):
+    """Raise ScopeError unless `entry` is a well-formed scope entry."""
+    if not isinstance(entry, dict):
+        raise ScopeError("a scope entry must be a JSON object")
+    missing = [k for k in _SCOPE_REQUIRED if k not in entry]
+    if missing:
+        raise ScopeError("missing scope field(s): " + ", ".join(missing))
+    for k in _SCOPE_REQUIRED + ("note",):
+        if k in entry and not isinstance(entry[k], str):
+            raise ScopeError(f"scope {k} must be a string")
+    if not entry["target"].strip():
+        raise ScopeError("scope target must not be empty")
+    if entry["added"] and not _DATE_RE.match(entry["added"]):
+        raise ScopeError(f"scope added must be YYYY-MM-DD (got "
+                         f"{entry['added']!r})")
+    if entry["status"] not in _SCOPE_STATUSES:
+        raise ScopeError(f"scope status must be one of {_SCOPE_STATUSES}")
+    return {"target": entry["target"], "program": entry["program"],
+            "added": entry["added"], "status": entry["status"],
+            "note": entry.get("note", "")}
+
+
+def save_scope(entries):
+    """Atomically replace the whole scope file. Validates every entry and
+    rejects duplicate targets - two entries for one target is how a scope
+    stops meaning anything."""
+    entries = [validate_scope_entry(e) for e in entries]
+    targets = [e["target"] for e in entries]
+    if len(targets) != len(set(targets)):
+        raise ScopeError("duplicate target in scope")
+    entries.sort(key=lambda e: (e["added"] or "9999-99-99", e["target"]))
+    os.makedirs(KNOWLEDGE_DIR, exist_ok=True)
+    tmp = scope_path() + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(entries, f, indent=2, sort_keys=True)
+        f.write("\n")
+    os.replace(tmp, scope_path())
+    return entries
+
+
+def scope_add(target, program="", note="", status="active", added=""):
+    """Add one target to the scope. program/note default to sensible
+    strings so a quick scope-add stays one argument. Raises ScopeError if
+    the target is already declared - use scope_status() to change it."""
+    target = target.strip()
+    if not target:
+        raise ScopeError("target must not be empty")
+    entries = load_scope()
+    if any(e["target"] == target for e in entries):
+        raise ScopeError(f"{target!r} is already in scope - use "
+                         f"scope_status() to change it")
+    entry = {"target": target,
+             "program": program or "unspecified",
+             "added": added or _today(),
+             "status": status,
+             "note": note}
+    entries.append(entry)
+    save_scope(entries)
+    return entry
+
+
+def scope_remove(target):
+    """Drop one target from the scope. ScopeError when it is not there -
+    removing nothing silently would hide the typo that called for it."""
+    entries = load_scope()
+    kept = [e for e in entries if e["target"] != target]
+    if len(kept) == len(entries):
+        raise ScopeError(f"{target!r} is not in scope - current: "
+                         f"{[e['target'] for e in entries] or 'none'}")
+    save_scope(kept)
+
+
+def scope_status(target, status):
+    """Flip one target's status (active / monitor / retired /
+    out-of-scope) without touching the rest."""
+    if status not in _SCOPE_STATUSES:
+        raise ScopeError(f"scope status must be one of {_SCOPE_STATUSES}")
+    entries = load_scope()
+    for e in entries:
+        if e["target"] == target:
+            e["status"] = status
+            save_scope(entries)
+            return e
+    raise ScopeError(f"{target!r} is not in scope")
+
+
+def scope_targets():
+    """The scope, flattened to the sorted target strings - the one-line
+    answer to 'what are we watching right now'."""
+    return [e["target"] for e in load_scope()]
+
+
+def _today():
+    import datetime
+    return datetime.date.today().isoformat()
+
+
+def _grow_scope(rec):
+    """Add a record's target to the scope when it is new.
+
+    save() calls this so the scope keeps pace with the work: the first
+    record about a target declares it, dynamically, without anyone editing
+    a config. A scope file that cannot be written must not fail the
+    record's save - the scope is a convenience grown FROM the records, not
+    a constraint they answer to - so every failure here is swallowed.
+    """
+    try:
+        entries = load_scope()
+        if any(e["target"] == rec["target"] for e in entries):
+            return
+        entries.append({"target": rec["target"],
+                        "program": rec["program"],
+                        "added": rec["date_filed"] or _today(),
+                        "status": "active",
+                        "note": "grown automatically from record "
+                                + rec["id"]})
+        save_scope(entries)
+    except Exception:                                  # noqa: BLE001
+        pass
+
+
+def save(rec, overwrite=False):
+    """Validate and atomically write one record. Returns the record."""
+    validate(rec)
+    path = _path(rec["id"])
+    if os.path.exists(path) and not overwrite:
+        raise RecordError(f"{rec['id']} already exists; pass overwrite=True "
+                          f"to replace it on purpose")
+    os.makedirs(KNOWLEDGE_DIR, exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(rec, f, indent=2, sort_keys=True)
+        f.write("\n")
+    os.replace(tmp, path)
+    _grow_scope(rec)
+    return rec
+
+
 def to_markdown(rec):
     """The triager-readable report. Pure function of the record."""
     L = [f"# {rec['title']}", ""]
@@ -323,7 +509,50 @@ def main(argv=None):
         print(f"{s['records']} records")
         for k in sorted(s["by_status"]):
             print(f"  {k:<19} {s['by_status'][k]}")
-        print("targets: " + ", ".join(s["targets"]))
+        print("targets: " + (", ".join(s["targets"]) or "none"))
+        print("scope:   " + (", ".join(s["scope"]) or "empty"))
+        return 0
+
+    if cmd == "scope":
+        for e in load_scope():
+            print(f"{e['target']:<42} {e['status']:<12} "
+                  f"{e['added'] or '-':<10} {e['program']}")
+        if not load_scope():
+            print("(empty scope - save a record or run scope-add to start it)")
+        return 0
+
+    if cmd in ("scope-add", "scope-remove", "scope-status"):
+        try:
+            if cmd == "scope-add":
+                if not rest:
+                    print("usage: scope-add TARGET [--program P] [--note N] "
+                          "[--status S]", file=sys.stderr)
+                    return 2
+                opts = dict(zip(rest[1::2], rest[2::2]))
+                for flag in opts:
+                    if flag not in ("--program", "--note", "--status"):
+                        raise ScopeError(f"unknown flag {flag}")
+                entry = scope_add(
+                    rest[0], program=opts.get("--program", ""),
+                    note=opts.get("--note", ""),
+                    status=opts.get("--status", "active"))
+                print(f"scope: +{entry['target']} ({entry['status']}, "
+                      f"added {entry['added']})")
+            elif cmd == "scope-remove":
+                if not rest:
+                    print("usage: scope-remove TARGET", file=sys.stderr)
+                    return 2
+                scope_remove(rest[0])
+                print(f"scope: -{rest[0]}")
+            else:
+                if len(rest) < 2:
+                    print("usage: scope-status TARGET STATUS", file=sys.stderr)
+                    return 2
+                scope_status(rest[0], rest[1])
+                print(f"scope: {rest[0]} -> {rest[1]}")
+        except ScopeError as exc:
+            print(f"[scope] {exc}", file=sys.stderr)
+            return 2
         return 0
 
     if cmd == "timeline":
