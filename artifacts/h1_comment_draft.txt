@@ -4,23 +4,31 @@ To be posted as-is — concise by design (triager's "wall of text" critique), no
 
 ---
 
-Thanks — we fully agree with this disposition: informative, no CVE. The trigger is the
-application's own code (the getinfo → setopt pointer round-trip), so the most a remote
-party can do is be the recipient of a few leaked bytes, and a CVE "about the past" has
-declining value — we won't be requesting one or a reopen.
+Following the informative, no-CVE disposition: we agree with the outcome and
+are not requesting a reopen or a CVE. The trigger is the application's own
+code (the getinfo → setopt pointer round-trip), so the most a remote party
+can do is be the recipient of a few leaked bytes.
 
-Two quick clarifications on the evidence notes, both consistent with what you said:
+Three points on the evidence notes:
 
-- **ASan failures** — correct, those were our Termux/proot environment (ASan cannot map
-  its shadow memory there); all conclusive ASan runs came from a native Ubuntu sandbox.
-- **Three runs with different leaked bytes** — that's the reproducibility result itself:
-  the free-then-read mechanism is deterministic, while the recycled bytes are
-  ASLR-varied by construction (heap-pointer fragments ending in the tcache size-class
-  byte). Same signature every run, different values — exactly as expected, and we're
-  not disputing the past-bug framing.
+- **ASan failures** — those came from our Termux/proot environment, where ASan
+  cannot map its shadow memory (documented in our own UBUNTU.md / preflight);
+  all conclusive ASan runs came from a native Ubuntu sandbox. That is an
+  environment fact, not a defect in the findings.
+- **Three runs with different leaked bytes** — that is the reproducibility
+  result itself: the free-then-read mechanism is deterministic, while the
+  recycled bytes are ASLR-varied by construction (heap-pointer fragments
+  ending in the tcache size-class byte). Same signature every run, different
+  values — we never read that as weakening the finding.
+- **Re-verification as requested** — when output from an environment other
+  than the native Linux sandbox was requested, we re-ran the PoC in a cloud
+  Linux terminal: same vulnerable commit, same free-then-read signature, and
+  still clean on the fixed commit (logged in our knowledge record,
+  knowledge/curl-referer-uaf.json).
 
-The one fact worth keeping for packagers: regression window `ff300ac4aa` (2026-06-01) →
-`d0247689` (2026-08-27); **8.21.0 (2026-06-23) is the only tagged release that ever
-shipped it**, and the fix first shipped in **8.22.0**.
+The one fact worth keeping for packagers: regression window `ff300ac4aa`
+(2026-06-01) → `d0247689` (2026-08-27); **8.21.0 (2026-06-23) is the only
+tagged release that ever shipped it**, and the fix first shipped in
+**8.22.0**.
 
 Happy for the report to stay informative — thanks for the clear triage.
