@@ -30,7 +30,21 @@
 #===============================================================================
 set -euo pipefail
 
-REPO="${H1_REPO:-$HOME/WhiteHat_mini-AGI}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# repo auto-detect, most specific wins: H1_REPO -> the directory the script
+# lives in (the git-clone case: clone, `cd mini-AGI`, run - no env needed,
+# exactly what a fresh cloud terminal wants) -> a WhiteHat_mini-AGI checkout
+# next to $HOME (the copy-just-this-script case)
+REPO="${H1_REPO:-}"
+if [ -z "$REPO" ]; then
+    if [ -f "$SCRIPT_DIR/artifacts/h1_comment_draft.txt" ]; then
+        REPO="$SCRIPT_DIR"
+    elif [ -f "$HOME/WhiteHat_mini-AGI/artifacts/h1_comment_draft.txt" ]; then
+        REPO="$HOME/WhiteHat_mini-AGI"
+    else
+        REPO="$SCRIPT_DIR"
+    fi
+fi
 DRAFT="$REPO/artifacts/h1_comment_draft.txt"
 RECORD="$REPO/knowledge/curl-referer-uaf.json"
 REPORT_ID=""
@@ -47,13 +61,14 @@ die() { echo "[h1] ERROR: $*" >&2; exit 2; }
 usage() { sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; }
 
 require_repo() {
-    [ -f "$DRAFT" ]  || die "draft not found: $DRAFT (set H1_REPO=/path/to/WhiteHat_mini-AGI)"
+    [ -f "$DRAFT" ]  || die "draft not found: $DRAFT (set H1_REPO=/path/to/WhiteHat_mini-AGI, or run from inside the repo clone)"
     [ -f "$RECORD" ] || die "knowledge record not found: $RECORD"
 }
 
 # ---------------------------------------------------------------- fact checks
-verify_facts() {
-    command -v python3 >/dev/null 2>&1 || die "python3 required for verification"
+# primary verifier needs python3; the fallback is pure bash grep for terminals
+# that ship without it (verified on a fresh cloud sandbox)
+verify_facts_python() {
     H1_DRAFT="$DRAFT" H1_RECORD="$RECORD" python3 - <<'PY'
 import json, os, sys
 
@@ -81,6 +96,32 @@ if missing:
     sys.exit("claims missing from record: " + ", ".join(missing))
 print("[h1] facts OK: 9/9 claims trace to the record; disposition informative/no-CVE")
 PY
+}
+
+verify_facts_grep() {
+    # bash-only checks: same claims, string-match over the JSON + draft
+    grep -qF 'Thanks — we fully agree' "$DRAFT" || die "draft body marker missing"
+    grep -qF '"id": "curl-referer-uaf"' "$RECORD" || die "wrong record id"
+    grep -qF '"status": "n/a-informational"' "$RECORD" || die "record status mismatch"
+    grep -qF '"date_closed": "2026-10-01"' "$RECORD" || die "record date_closed mismatch"
+    local claim
+    for claim in 'ff300ac4aa' 'd0247689' \
+                 '8.22.0 (tag curl-8_22_0 on 2026-09-01' \
+                 '8.21.0 (2026-06-23) is the ONLY tagged release' \
+                 'Termux/proot' 'ASLR' 'informative, no CVE'; do
+        grep -qF "$claim" "$RECORD" || die "claim missing from record: $claim"
+    done
+    echo "[h1] facts OK: claims verified by grep (python3 not available)"
+}
+
+verify_facts() {
+    # probe: python3 must exist AND actually run (a broken python3 on PATH
+    # must fall through to the bash verifier, not fail the whole check)
+    if command -v python3 >/dev/null 2>&1 && python3 -c '' 2>/dev/null; then
+        verify_facts_python || die "fact verification failed"
+    else
+        verify_facts_grep || die "fact verification failed"
+    fi
 }
 
 extract_body() {
@@ -118,7 +159,9 @@ check)
 build)
     require_repo
     verify_facts
-    OUT="${OUT:-/sdcard/h1_comment.md}"
+    if [ -z "$OUT" ]; then
+        if [ -d /sdcard ]; then OUT=/sdcard/h1_comment.md; else OUT=h1_comment.md; fi
+    fi
     extract_body > "$OUT"
     echo "[h1] wrote $OUT ($(wc -l < "$OUT") lines, $(wc -w < "$OUT") words)"
     echo "[h1] review it, then: bash $0 send --file $OUT"
